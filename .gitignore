@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+
+/vendor/
+/composer.phar
+/.runtime/
+/logs/
+*.log
+
+assets/ino/secrets.h
+*.db-journal
+*.db-shm
+*.db-wal
+

@@ -1,0 +1,18 @@
+Options -Indexes -MultiViews
+
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+
+    # Somente a dashboard, os assets publicos e os quatro endpoints podem ser acessados.
+    RewriteRule ^$ - [L]
+    RewriteRule ^index\.php$ - [L]
+    RewriteRule ^static/css/dashboard\.css$ - [L]
+    RewriteRule ^static/js/dashboard\.js$ - [L]
+    RewriteRule ^static/js/vendor/chart\.umd\.min\.js$ - [L]
+    RewriteRule ^api/device/(current|history|status|alerts)\.php$ - [L]
+    RewriteRule ^ - [R=404,L]
+</IfModule>
+
+<IfModule !mod_rewrite.c>
+    Require all denied
+</IfModule>

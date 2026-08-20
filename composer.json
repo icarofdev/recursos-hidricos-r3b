@@ -1,0 +1,32 @@
+{
+    "name": "r3b/recursos-hidricos",
+    "description": "Dashboard PHP e worker MQTT para monitoramento hidrico com SM-WA/ESP32.",
+    "type": "project",
+    "license": "proprietary",
+    "require": {
+        "php": "^8.1",
+        "ext-json": "*",
+        "ext-openssl": "*",
+        "ext-pdo": "*",
+        "ext-pdo_mysql": "*",
+        "php-mqtt/client": "^2.3",
+        "vlucas/phpdotenv": "^5.6"
+    },
+    "require-dev": {
+        "ext-pdo_sqlite": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "R3B\\": "src/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "@php tests/run.php"
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

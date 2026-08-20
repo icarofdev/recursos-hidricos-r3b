@@ -1,5 +1,6 @@
 const dashboardState = {
     latest: null,
+    device: null,
     history: [],
     backendAlerts: [],
     selectedRangeHours: 24,
@@ -11,8 +12,25 @@ const dashboardState = {
     elapsedTimer: null,
     historyError: false,
     latestError: false,
-    apiAvailable: null
+    statusError: false,
+    alertsError: false,
+    apiAvailable: null,
+    updateInProgress: false,
+    historyRequestId: 0,
+    historyUpdateInProgress: false,
+    historyLastLoadedAt: 0,
+    historyLoadedRangeHours: null
 };
+
+const API_ENDPOINTS = {
+    current: 'api/device/current.php',
+    history: 'api/device/history.php',
+    status: 'api/device/status.php',
+    alerts: 'api/device/alerts.php'
+};
+
+const REQUEST_TIMEOUT_MILLISECONDS = 8000;
+const HISTORY_REFRESH_MILLISECONDS = 30000;
 
 const RANGE_LIMITS = {
     24: 300,
@@ -37,7 +55,12 @@ function escapeHTML(value) {
 
 function parseDate(value) {
     if (!value) return null;
-    const date = new Date(value);
+    let normalizedValue = value;
+    if (typeof value === 'number' || /^\d{10,13}$/.test(String(value))) {
+        const numericValue = Number(value);
+        normalizedValue = Math.abs(numericValue) < 1e12 ? numericValue * 1000 : numericValue;
+    }
+    const date = new Date(normalizedValue);
     return Number.isNaN(date.getTime()) ? null : date;
 }
 
@@ -134,10 +157,47 @@ function getReservoirStatus(percentual) {
     return { label: 'Normal', description: 'Volume dentro da faixa recomendada', className: 'is-normal' };
 }
 
-function isDeviceDisconnected(latest = dashboardState.latest) {
-    const timestamp = latest ? parseDate(latest.timestamp) : null;
-    if (!timestamp) return true;
-    return (Date.now() - timestamp.getTime()) > 2 * 60 * 1000;
+function getDeviceLastSeen() {
+    return dashboardState.device?.last_seen || null;
+}
+
+function compactHistoryForRange(history, hours = dashboardState.selectedRangeHours) {
+    const cutoff = Date.now() - hours * 60 * 60 * 1000;
+    const readingsByKey = new Map();
+
+    history.forEach(item => {
+        const date = parseDate(item?.timestamp);
+        if (!date || date.getTime() < cutoff) return;
+        const deviceId = item.sensor_id || item.device_id || 'unknown';
+        const key = `${deviceId}:${date.getTime()}`;
+        readingsByKey.set(key, item);
+    });
+
+    const limit = RANGE_LIMITS[hours] || 500;
+    return getChronologicalHistory([...readingsByKey.values()]).slice(-limit);
+}
+
+function mergeCurrentReadingIntoHistory(reading) {
+    const candidates = reading ? [...dashboardState.history, reading] : dashboardState.history;
+    const previousLength = dashboardState.history.length;
+    dashboardState.history = compactHistoryForRange(candidates);
+    return Boolean(reading) || dashboardState.history.length !== previousLength;
+}
+
+function shouldRefreshFullHistory(hours = dashboardState.selectedRangeHours) {
+    if (dashboardState.historyUpdateInProgress) return false;
+    if (dashboardState.historyError || dashboardState.historyLastLoadedAt === 0) return true;
+    if (dashboardState.historyLoadedRangeHours !== hours) return true;
+    return (Date.now() - dashboardState.historyLastLoadedAt) >= HISTORY_REFRESH_MILLISECONDS;
+}
+
+function getMonitoredDeviceId() {
+    return dashboardState.device?.id || dashboardState.latest?.sensor_id || null;
+}
+
+function isDeviceDisconnected() {
+    const backendStatus = String(dashboardState.device?.status || '').trim().toLowerCase();
+    return backendStatus !== 'online';
 }
 
 function hasAbruptDrop(history = dashboardState.history) {
@@ -232,7 +292,7 @@ function renderConnection() {
     const dot = getElement('connection-dot');
     const label = getElement('connection-label');
     const updated = getElement('updated-label');
-    const latestDate = dashboardState.latest ? parseDate(dashboardState.latest.timestamp) : null;
+    const lastSeen = parseDate(getDeviceLastSeen());
 
     if (dashboardState.apiAvailable === false) {
         setStatusDot(dot, 'is-error');
@@ -241,23 +301,30 @@ function renderConnection() {
         return;
     }
 
-    if (!dashboardState.latest) {
+    if (dashboardState.statusError) {
+        setStatusDot(dot, 'is-error');
+        label.textContent = 'Status indisponível';
+        updated.textContent = 'Aguardando nova consulta';
+        return;
+    }
+
+    if (!dashboardState.device) {
         setStatusDot(dot, 'is-waiting');
-        label.textContent = 'Sem leituras';
-        updated.textContent = 'Aguardando dispositivo';
+        label.textContent = dashboardState.latest ? 'Sem status' : 'Sem dispositivo';
+        updated.textContent = dashboardState.latest ? 'Status não informado' : 'Aguardando comunicação';
         return;
     }
 
     if (isDeviceDisconnected()) {
         setStatusDot(dot, 'is-error');
-        label.textContent = 'Desconectado';
-        updated.textContent = `Última leitura ${formatElapsed(latestDate)}`;
+        label.textContent = 'Offline';
+        updated.textContent = lastSeen ? `Último contato ${formatElapsed(lastSeen)}` : 'Sem comunicação registrada';
         return;
     }
 
     setStatusDot(dot, '');
-    label.textContent = 'Conectado';
-    updated.textContent = `Atualizado ${formatElapsed(latestDate)}`;
+    label.textContent = 'Online';
+    updated.textContent = lastSeen ? `Último contato ${formatElapsed(lastSeen)}` : 'Comunicação ativa';
 }
 
 function renderSystemStatus() {
@@ -267,10 +334,11 @@ function renderSystemStatus() {
     const time = getElement('system-status-time');
     const latest = dashboardState.latest;
     const latestDate = latest ? parseDate(latest.timestamp) : null;
+    const lastSeen = parseDate(getDeviceLastSeen());
     const percentual = latest ? Number(latest.percentual) : NaN;
 
     container.className = 'system-status';
-    time.textContent = latestDate ? formatElapsed(latestDate) : 'Sem leitura';
+    time.textContent = lastSeen ? formatElapsed(lastSeen) : latestDate ? formatElapsed(latestDate) : 'Sem leitura';
 
     if (dashboardState.apiAvailable === false) {
         container.classList.add('is-error');
@@ -279,17 +347,42 @@ function renderSystemStatus() {
         return;
     }
 
-    if (!latest) {
-        container.classList.add('is-neutral');
-        title.textContent = 'Aguardando a primeira leitura';
-        description.textContent = 'O painel está disponível, mas nenhum dado foi recebido do dispositivo.';
+    if (dashboardState.statusError) {
+        container.classList.add('is-error');
+        title.textContent = 'Status do dispositivo indisponível';
+        description.textContent = 'A API de status não respondeu. Nenhum estado anterior será exibido como atual.';
         return;
     }
 
-    if (isDeviceDisconnected(latest)) {
+    if (dashboardState.device && isDeviceDisconnected()) {
         container.classList.add('is-critical');
-        title.textContent = 'Sensor sem comunicação';
-        description.textContent = `O dispositivo ${latest.sensor_id || 'monitorado'} não envia dados ${formatElapsed(latestDate)}.`;
+        title.textContent = 'Dispositivo offline';
+        description.textContent = lastSeen
+            ? `O dispositivo ${getMonitoredDeviceId() || 'SM-WA'} está offline. Última comunicação ${formatElapsed(lastSeen)}.`
+            : `O dispositivo ${getMonitoredDeviceId() || 'SM-WA'} está offline e não informou a última comunicação.`;
+        return;
+    }
+
+    if (dashboardState.latestError) {
+        container.classList.add('is-error');
+        title.textContent = 'Leitura atual indisponível';
+        description.textContent = 'O status do dispositivo foi consultado, mas a leitura atual não pôde ser carregada.';
+        return;
+    }
+
+    if (!latest) {
+        container.classList.add('is-neutral');
+        title.textContent = 'Aguardando a primeira leitura';
+        description.textContent = dashboardState.device
+            ? 'O dispositivo foi identificado, mas ainda não há medição disponível.'
+            : 'O painel está disponível, mas nenhum dispositivo ou medição foi encontrado.';
+        return;
+    }
+
+    if (!dashboardState.device) {
+        container.classList.add('is-neutral');
+        title.textContent = 'Status do dispositivo não informado';
+        description.textContent = 'A leitura atual foi carregada, mas a API de status não identificou o dispositivo.';
         return;
     }
 
@@ -327,13 +420,16 @@ function renderLatest() {
     if (!latest) {
         document.documentElement.style.setProperty('--water-level', '0%');
         tank.setAttribute('aria-label', 'Nível do reservatório sem leitura disponível');
+        tankWater.className = 'tank-water';
         statusBadge.className = 'status-badge is-waiting';
         statusBadge.textContent = 'Aguardando';
         getElement('level-reading').textContent = '—';
         getElement('level-height').textContent = '—';
         getElement('volume-reading').textContent = '—';
         getElement('level-classification').textContent = 'Aguardando classificação';
-        getElement('monitored-device').textContent = 'Nenhum dispositivo identificado';
+        getElement('monitored-device').textContent = dashboardState.device?.id
+            ? `Dispositivo ${dashboardState.device.id} · Sem leitura atual`
+            : 'Nenhum dispositivo identificado';
         getElement('metric-timestamp').textContent = 'Sem leitura';
         return;
     }
@@ -344,7 +440,7 @@ function renderLatest() {
     const volume = Number(latest.volume_litros);
     const safePercentual = Number.isFinite(percentual) ? clamp(percentual, 0, 100) : 0;
     const status = getReservoirStatus(percentual);
-    const sensorName = latest.sensor_id || 'Dispositivo sem identificação';
+    const sensorName = getMonitoredDeviceId() || 'Dispositivo sem identificação';
 
     document.documentElement.style.setProperty('--water-level', `${safePercentual}%`);
     tank.setAttribute('aria-label', `Nível atual do reservatório: ${formatNumber(percentual, 0)} por cento. Estado: ${status.label}.`);
@@ -368,7 +464,8 @@ function renderMetrics() {
     });
     const consumption = calculateConsumption(todayHistory);
     const trend = calculateTrend();
-    const hasLatest = Boolean(dashboardState.latest);
+    const device = dashboardState.device;
+    const lastSeen = parseDate(getDeviceLastSeen());
 
     getElement('daily-consumption').textContent = consumption.hasData ? formatNumber(consumption.total) : '—';
     getElement('daily-consumption-unit').textContent = consumption.hasData ? 'litros' : 'sem dados suficientes';
@@ -379,15 +476,24 @@ function renderMetrics() {
     getElement('trend-reading').textContent = trend.label;
     getElement('trend-context').textContent = trend.context;
 
-    if (!hasLatest) {
-        getElement('device-state-reading').textContent = 'Sem dados';
-        getElement('device-state-context').textContent = 'Nenhum dispositivo identificado';
+    if (dashboardState.statusError) {
+        getElement('device-state-reading').textContent = 'Indisponível';
+        getElement('device-state-context').textContent = 'A API de status não respondeu';
+    } else if (!device) {
+        getElement('device-state-reading').textContent = dashboardState.latest ? 'Sem status' : 'Sem dados';
+        getElement('device-state-context').textContent = dashboardState.latest
+            ? 'A leitura não possui status associado'
+            : 'Nenhum dispositivo identificado';
     } else if (isDeviceDisconnected()) {
-        getElement('device-state-reading').textContent = 'Desconectado';
-        getElement('device-state-context').textContent = `Último contato ${formatElapsed(dashboardState.latest.timestamp)}`;
+        getElement('device-state-reading').textContent = 'Offline';
+        getElement('device-state-context').textContent = lastSeen
+            ? `Último contato ${formatElapsed(lastSeen)}`
+            : 'Sem comunicação registrada';
     } else {
-        getElement('device-state-reading').textContent = 'Operacional';
-        getElement('device-state-context').textContent = `Último contato ${formatElapsed(dashboardState.latest.timestamp)}`;
+        getElement('device-state-reading').textContent = 'Online';
+        getElement('device-state-context').textContent = lastSeen
+            ? `Último contato ${formatElapsed(lastSeen)}`
+            : 'Comunicação ativa';
     }
 }
 
@@ -546,16 +652,26 @@ function renderChart() {
     hideChartState();
 }
 
+function getAlertTitle(alert) {
+    const message = String(alert.message || '');
+    if (/offline|comunica|dispositivo/i.test(message)) return 'Dispositivo offline';
+    if (/nível|nivel|água|agua/i.test(message)) {
+        return alert.type === 'critical' ? 'Nível crítico' : 'Nível baixo';
+    }
+    return 'Evento do sistema';
+}
+
 function normalizeAlerts() {
     const latest = dashboardState.latest;
     const latestDate = latest ? latest.timestamp : null;
-    const sensorId = latest?.sensor_id || 'Dispositivo não identificado';
+    const lastSeen = getDeviceLastSeen();
+    const sensorId = getMonitoredDeviceId() || 'Dispositivo não identificado';
     const alerts = dashboardState.backendAlerts.map(alert => ({
         type: alert.type === 'critical' ? 'critical' : alert.type === 'warning' ? 'warning' : 'info',
-        title: alert.type === 'critical' ? 'Nível crítico' : alert.type === 'warning' ? 'Nível baixo' : 'Evento do sistema',
+        title: getAlertTitle(alert),
         message: alert.message || 'Alerta informado pela API.',
-        timestamp: latestDate,
-        sensorId,
+        timestamp: alert.timestamp || latestDate,
+        sensorId: alert.device_id || sensorId,
         state: 'Pendente'
     }));
 
@@ -572,12 +688,17 @@ function normalizeAlerts() {
         });
     }
 
-    if (!latest || isDeviceDisconnected(latest)) {
+    const hasConfirmedCommunicationFailure = dashboardState.device
+        ? isDeviceDisconnected()
+        : !latest;
+    if (!dashboardState.statusError && hasConfirmedCommunicationFailure) {
         alerts.push({
             type: 'critical',
-            title: 'Sensor sem comunicação',
-            message: latestDate ? `Nenhuma nova leitura ${formatElapsed(latestDate)}.` : 'Nenhuma leitura foi recebida do dispositivo.',
-            timestamp: latestDate,
+            title: dashboardState.device ? 'Dispositivo offline' : 'Dispositivo sem comunicação',
+            message: lastSeen
+                ? `Nenhuma nova comunicação ${formatElapsed(lastSeen)}.`
+                : 'Nenhuma comunicação foi registrada para o dispositivo.',
+            timestamp: lastSeen || latestDate,
             sensorId,
             state: 'Pendente'
         });
@@ -617,12 +738,23 @@ function renderAlerts() {
     getElement('nav-alert-count').classList.toggle('has-alerts', alerts.length > 0);
     container.setAttribute('aria-busy', 'false');
 
+    if (dashboardState.alertsError && !alerts.length) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <span class="empty-state-icon" aria-hidden="true">!</span>
+                <strong>Alertas indisponíveis</strong>
+                <span>A API de alertas não respondeu. Uma nova tentativa será feita automaticamente.</span>
+            </div>
+        `;
+        return;
+    }
+
     if (!alerts.length) {
         container.innerHTML = `
             <div class="empty-state">
                 <span class="empty-state-icon" aria-hidden="true">✓</span>
                 <strong>Nenhum alerta ativo</strong>
-                <span>A leitura mais recente está dentro dos limites configurados. O backend atual não mantém histórico de alertas resolvidos.</span>
+                <span>Nenhum alerta ativo foi informado pela API ou identificado nas leituras atuais.</span>
             </div>
         `;
         return;
@@ -646,29 +778,51 @@ function renderAlerts() {
 
 function renderDevice() {
     const latest = dashboardState.latest;
+    const device = dashboardState.device;
     const detailsButton = getElement('device-details-button');
+    const details = getElement('device-details');
+    const sensorId = getMonitoredDeviceId();
+    const lastSeen = parseDate(getDeviceLastSeen());
 
-    if (!latest) {
+    if (!sensorId) {
         getElement('devices-count').textContent = '0 identificados';
         getElement('device-name').textContent = 'Nenhum dispositivo identificado';
-        getElement('device-status').textContent = 'Sem dados';
-        getElement('device-last-seen').textContent = 'Aguardando a primeira comunicação';
-        setStatusDot(getElement('device-dot'), 'is-waiting');
+        getElement('device-status').textContent = dashboardState.statusError ? 'Status indisponível' : 'Sem dados';
+        getElement('device-last-seen').textContent = dashboardState.statusError
+            ? 'Não foi possível consultar a comunicação'
+            : 'Aguardando a primeira comunicação';
+        setStatusDot(getElement('device-dot'), dashboardState.statusError ? 'is-error' : 'is-waiting');
         detailsButton.disabled = true;
+        detailsButton.textContent = 'Ver detalhes';
+        detailsButton.setAttribute('aria-expanded', 'false');
+        details.hidden = true;
+        getElement('detail-sensor-id').textContent = '—';
+        getElement('detail-last-reading').textContent = '—';
+        getElement('detail-capacity').textContent = '—';
         return;
     }
 
-    const disconnected = isDeviceDisconnected(latest);
-    const sensorId = latest.sensor_id || 'Sem identificador';
+    const disconnected = !dashboardState.statusError && device ? isDeviceDisconnected() : null;
     getElement('devices-count').textContent = '1 identificado';
     getElement('device-name').textContent = sensorId;
-    getElement('device-status').textContent = disconnected ? 'Desconectado' : 'Online';
-    getElement('device-last-seen').textContent = `Última comunicação ${formatElapsed(latest.timestamp)}`;
-    setStatusDot(getElement('device-dot'), disconnected ? 'is-error' : '');
+    getElement('device-status').textContent = dashboardState.statusError
+        ? 'Status indisponível'
+        : !device
+            ? 'Sem status'
+            : disconnected
+                ? 'Offline'
+                : 'Online';
+    getElement('device-last-seen').textContent = lastSeen
+        ? `Última comunicação ${formatElapsed(lastSeen)}`
+        : 'Sem comunicação registrada';
+    setStatusDot(
+        getElement('device-dot'),
+        dashboardState.statusError || disconnected ? 'is-error' : device ? '' : 'is-waiting'
+    );
     detailsButton.disabled = false;
     getElement('detail-sensor-id').textContent = sensorId;
-    getElement('detail-last-reading').textContent = formatDateTime(latest.timestamp);
-    getElement('detail-capacity').textContent = Number.isFinite(Number(latest.capacidade_cm))
+    getElement('detail-last-reading').textContent = latest ? formatDateTime(latest.timestamp) : 'Sem leitura atual';
+    getElement('detail-capacity').textContent = latest && Number.isFinite(Number(latest.capacidade_cm))
         ? `${formatNumber(latest.capacidade_cm)} cm`
         : 'Não informada';
 }
@@ -721,79 +875,187 @@ function renderHistoryTable() {
     getElement('next-page').disabled = dashboardState.currentPage === totalPages;
 }
 
-function renderAll() {
+function renderAll({ includeHistory = true } = {}) {
     renderConnection();
     renderSystemStatus();
     renderLatest();
     renderMetrics();
-    renderChart();
+    if (includeHistory) renderChart();
     renderAlerts();
     renderDevice();
-    renderHistoryTable();
+    if (includeHistory) renderHistoryTable();
     document.body.classList.remove('is-loading');
 }
 
-async function requestJSON(url) {
-    const response = await fetch(url, { headers: { Accept: 'application/json' } });
-    if (!response.ok) {
-        const error = new Error(`Falha HTTP ${response.status}`);
-        error.status = response.status;
+async function requestJSON(url, { allowNotFound = false } = {}) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MILLISECONDS);
+
+    try {
+        const response = await fetch(url, {
+            cache: 'no-store',
+            headers: { Accept: 'application/json' },
+            signal: controller.signal
+        });
+        if (allowNotFound && response.status === 404) return null;
+        if (!response.ok) {
+            const error = new Error(`Falha HTTP ${response.status}`);
+            error.status = response.status;
+            throw error;
+        }
+        return await response.json();
+    } catch (error) {
+        if (error.name === 'AbortError') {
+            const timeoutError = new Error('Tempo limite excedido ao consultar a API');
+            timeoutError.code = 'REQUEST_TIMEOUT';
+            throw timeoutError;
+        }
         throw error;
+    } finally {
+        window.clearTimeout(timeoutId);
     }
-    return response.json();
+}
+
+function requireSuccessfulPayload(payload, endpointName) {
+    if (!payload || payload.success !== true) {
+        throw new Error(`Resposta inválida do endpoint ${endpointName}`);
+    }
+    return payload;
+}
+
+function normalizeReading(reading, fallbackDeviceId = null) {
+    if (!reading || typeof reading !== 'object' || Array.isArray(reading)) {
+        throw new Error('Leitura inválida recebida da API');
+    }
+    return {
+        ...reading,
+        sensor_id: reading.sensor_id || reading.device_id || fallbackDeviceId || null
+    };
 }
 
 async function fetchLatestData() {
-    try {
-        return await requestJSON('/api/latest');
-    } catch (error) {
-        if (error.status === 404) return null;
-        throw error;
-    }
+    const payload = await requestJSON(API_ENDPOINTS.current, { allowNotFound: true });
+    if (payload === null) return null;
+    requireSuccessfulPayload(payload, 'current');
+    return normalizeReading(payload.data, payload.device?.id);
 }
 
-async function fetchHistoryData() {
-    const limit = RANGE_LIMITS[dashboardState.selectedRangeHours] || 500;
-    return requestJSON(`/api/history?hours=${dashboardState.selectedRangeHours}&limit=${limit}`);
+async function fetchStatusData() {
+    const payload = await requestJSON(API_ENDPOINTS.status, { allowNotFound: true });
+    if (payload === null) return null;
+    requireSuccessfulPayload(payload, 'status');
+    if (!payload.device || typeof payload.device !== 'object' || Array.isArray(payload.device)) {
+        throw new Error('Dispositivo inválido recebido da API de status');
+    }
+    return { ...payload.device };
+}
+
+async function fetchHistoryData(hours = dashboardState.selectedRangeHours) {
+    const limit = RANGE_LIMITS[hours] || 500;
+    const query = new URLSearchParams({ hours: String(hours), limit: String(limit) });
+    const payload = await requestJSON(`${API_ENDPOINTS.history}?${query}`);
+    requireSuccessfulPayload(payload, 'history');
+    if (!Array.isArray(payload.data)) throw new Error('Histórico inválido recebido da API');
+    return payload.data.map(item => normalizeReading(item, payload.device_id));
 }
 
 async function fetchAlertsData() {
-    return requestJSON('/api/alerts');
+    const payload = await requestJSON(API_ENDPOINTS.alerts);
+    requireSuccessfulPayload(payload, 'alerts');
+    if (!Array.isArray(payload.data)) throw new Error('Alertas inválidos recebidos da API');
+    return payload.data.filter(alert => alert && typeof alert === 'object' && !Array.isArray(alert));
 }
 
 async function updateDashboard() {
-    const [latestResult, historyResult, alertsResult] = await Promise.allSettled([
-        fetchLatestData(),
-        fetchHistoryData(),
-        fetchAlertsData()
-    ]);
+    if (dashboardState.updateInProgress) return;
+    dashboardState.updateInProgress = true;
+    const requestedHours = dashboardState.selectedRangeHours;
+    const refreshFullHistory = shouldRefreshFullHistory(requestedHours);
+    const historyRequestId = refreshFullHistory ? ++dashboardState.historyRequestId : null;
+    if (refreshFullHistory) dashboardState.historyUpdateInProgress = true;
 
-    dashboardState.latestError = latestResult.status === 'rejected';
-    dashboardState.historyError = historyResult.status === 'rejected';
-    dashboardState.apiAvailable = !(dashboardState.latestError && dashboardState.historyError);
+    try {
+        const historyRequest = refreshFullHistory
+            ? fetchHistoryData(requestedHours)
+            : Promise.resolve(null);
+        const [latestResult, statusResult, alertsResult, historyResult] = await Promise.allSettled([
+            fetchLatestData(),
+            fetchStatusData(),
+            fetchAlertsData(),
+            historyRequest
+        ]);
 
-    if (latestResult.status === 'fulfilled') dashboardState.latest = latestResult.value;
-    if (historyResult.status === 'fulfilled') dashboardState.history = Array.isArray(historyResult.value) ? historyResult.value : [];
-    if (alertsResult.status === 'fulfilled') {
-        dashboardState.backendAlerts = Array.isArray(alertsResult.value) ? alertsResult.value : [];
+        dashboardState.latestError = latestResult.status === 'rejected';
+        dashboardState.statusError = statusResult.status === 'rejected';
+        dashboardState.alertsError = alertsResult.status === 'rejected';
+        const availabilityResults = [latestResult, statusResult];
+        if (refreshFullHistory) availabilityResults.push(historyResult);
+        dashboardState.apiAvailable = availabilityResults.some(result => result.status === 'fulfilled');
+
+        dashboardState.latest = latestResult.status === 'fulfilled' ? latestResult.value : null;
+        dashboardState.device = statusResult.status === 'fulfilled' ? statusResult.value : null;
+        dashboardState.backendAlerts = alertsResult.status === 'fulfilled' ? alertsResult.value : [];
+
+        const canApplyHistory = refreshFullHistory
+            && historyRequestId === dashboardState.historyRequestId
+            && requestedHours === dashboardState.selectedRangeHours;
+        if (canApplyHistory) {
+            dashboardState.historyError = historyResult.status === 'rejected';
+            if (historyResult.status === 'fulfilled') {
+                dashboardState.history = compactHistoryForRange(historyResult.value, requestedHours);
+                dashboardState.historyLastLoadedAt = Date.now();
+                dashboardState.historyLoadedRangeHours = requestedHours;
+            } else {
+                dashboardState.history = [];
+                dashboardState.historyLastLoadedAt = 0;
+                dashboardState.historyLoadedRangeHours = null;
+            }
+            dashboardState.historyUpdateInProgress = false;
+        }
+
+        const currentMerged = mergeCurrentReadingIntoHistory(dashboardState.latest);
+        const includeHistory = !dashboardState.historyUpdateInProgress
+            && (canApplyHistory || currentMerged);
+        renderAll({ includeHistory });
+    } finally {
+        if (refreshFullHistory && historyRequestId === dashboardState.historyRequestId) {
+            dashboardState.historyUpdateInProgress = false;
+        }
+        dashboardState.updateInProgress = false;
     }
-
-    renderAll();
 }
 
 async function updateHistoryForRange() {
+    const requestedHours = dashboardState.selectedRangeHours;
+    const historyRequestId = ++dashboardState.historyRequestId;
+    dashboardState.historyUpdateInProgress = true;
     dashboardState.historyError = false;
+    dashboardState.history = [];
+    dashboardState.historyLastLoadedAt = 0;
+    dashboardState.historyLoadedRangeHours = null;
+    dashboardState.currentPage = 1;
     showChartState('Carregando período', 'Consultando as leituras da faixa selecionada.', '…');
     getElement('table-state').hidden = false;
     getElement('table-state').textContent = 'Carregando registros…';
     getElement('history-table-wrapper').hidden = true;
 
     try {
-        const history = await fetchHistoryData();
-        dashboardState.history = Array.isArray(history) ? history : [];
-        dashboardState.currentPage = 1;
+        const history = await fetchHistoryData(requestedHours);
+        if (historyRequestId !== dashboardState.historyRequestId) return;
+        dashboardState.history = compactHistoryForRange(history, requestedHours);
+        dashboardState.historyLastLoadedAt = Date.now();
+        dashboardState.historyLoadedRangeHours = requestedHours;
+        mergeCurrentReadingIntoHistory(dashboardState.latest);
     } catch (error) {
+        if (historyRequestId !== dashboardState.historyRequestId) return;
         dashboardState.historyError = true;
+        dashboardState.history = [];
+        dashboardState.historyLastLoadedAt = 0;
+        dashboardState.historyLoadedRangeHours = null;
+    } finally {
+        if (historyRequestId === dashboardState.historyRequestId) {
+            dashboardState.historyUpdateInProgress = false;
+        }
     }
 
     renderMetrics();
@@ -805,7 +1067,9 @@ async function updateHistoryForRange() {
 
 function resetRefreshTimer() {
     if (dashboardState.refreshTimer) window.clearInterval(dashboardState.refreshTimer);
-    dashboardState.refreshTimer = window.setInterval(updateDashboard, dashboardState.refreshMilliseconds);
+    dashboardState.refreshTimer = window.setInterval(() => {
+        void updateDashboard();
+    }, dashboardState.refreshMilliseconds);
 }
 
 function updateElapsedLabels() {
@@ -882,7 +1146,7 @@ function bindChartControls() {
                 item.classList.toggle('is-active', active);
                 item.setAttribute('aria-pressed', String(active));
             });
-            updateHistoryForRange();
+            void updateHistoryForRange();
         });
     });
 
@@ -927,7 +1191,7 @@ function bindRefreshPreference() {
         const seconds = dashboardState.refreshMilliseconds / 1000;
         getElement('refresh-rate-label').textContent = `a cada ${seconds} segundos`;
         resetRefreshTimer();
-        updateDashboard();
+        void updateDashboard();
     });
 }
 
@@ -938,7 +1202,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bindTableControls();
     bindDeviceDetails();
     bindRefreshPreference();
-    updateDashboard();
+    void updateDashboard();
     resetRefreshTimer();
     dashboardState.elapsedTimer = window.setInterval(updateElapsedLabels, 1000);
 });

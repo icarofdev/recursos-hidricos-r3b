@@ -1,159 +1,338 @@
+#include <ArduinoJson.h>
 #include <WiFi.h>
-#include <HTTPClient.h>
-#include <ArduinoJson.h> // Você precisará instalar esta biblioteca via Gerenciador de Bibliotecas
+#include <espMqttClient.h>
 
-// --- 1. Configurações de Rede ---
-const char* ssid = "SEU_SSID";          // Substitua pelo nome da sua rede WiFi
-const char* password = "SUA_SENHA_WIFI"; // Substitua pela sua senha WiFi
+#include <atomic>
+#include <math.h>
+#include <string.h>
 
-// --- 2. Configurações do Servidor Backend ---
-// Use o IP real do computador onde o servidor Flask está rodando.
-// NÃO use localhost ou 127.0.0.1 aqui.
-const char* serverAddress = "http://SEU_IP_DO_COMPUTADOR:5000/api/data";
+#include "secrets.h"
 
-// --- 3. Configurações do Sensor HC-SR04 ---
-const int TRIG_PIN = 13;
-const int ECHO_PIN = 12;
-const int DISTANCIA_MIN_CM = 2;   // Distância mínima que o sensor consegue ler
-const int DISTANCIA_MAX_CM = 400; // Distância máxima que o sensor consegue ler
+// --- Identidade e topicos MQTT ---
+constexpr char DEVICE_ID[] = "ESP32_001";
+constexpr char MQTT_CLIENT_ID[] = "sm-wa-ESP32_001";
+constexpr char MQTT_DATA_TOPIC[] = "sm-wa/ESP32_001/data";
+constexpr char MQTT_STATUS_TOPIC[] = "sm-wa/ESP32_001/status";
+constexpr char MQTT_ONLINE_PAYLOAD[] =
+    "{\"device_id\":\"ESP32_001\",\"status\":\"online\"}";
+constexpr char MQTT_OFFLINE_PAYLOAD[] =
+    "{\"device_id\":\"ESP32_001\",\"status\":\"offline\"}";
 
-// --- 4. Configurações da Caixa D'água (Ajuste suas dimensões aqui) ---
-const float ALTURA_CAIXA_CM = 150.0;    // Altura total da caixa d'água em centímetros
-const float LARGURA_CAIXA_CM = 100.0;   // Largura da caixa em centímetros
-const float COMPRIMENTO_CAIXA_CM = 100.0; // Comprimento da caixa em centímetros
+// --- Sensor HC-SR04 ---
+constexpr int TRIG_PIN = 13;
+constexpr int ECHO_PIN = 12;
+constexpr int DISTANCIA_MIN_CM = 2;
+constexpr int DISTANCIA_MAX_CM = 400;
+constexpr unsigned long PULSE_TIMEOUT_US = 30000UL;
 
-// Variáveis Globais
-long duracao;
-int distancia_vazio_cm;
-float nivel_agua_cm;
-float volume_litros;
-int percentual_nivel;
+// --- Caixa d'agua ---
+constexpr float ALTURA_CAIXA_CM = 150.0F;
+constexpr float LARGURA_CAIXA_CM = 100.0F;
+constexpr float COMPRIMENTO_CAIXA_CM = 100.0F;
 
-void setup() {
-    Serial.begin(115200);
-    pinMode(TRIG_PIN, OUTPUT);
-    pinMode(ECHO_PIN, INPUT);
+// --- Temporizacao e MQTT ---
+constexpr uint32_t WIFI_RECONNECT_INTERVAL_MS = 10000UL;
+constexpr uint32_t MQTT_RECONNECT_INTERVAL_MS = 5000UL;
+constexpr uint32_t PUBLISH_INTERVAL_MS = 30000UL;
+constexpr uint16_t MQTT_KEEP_ALIVE_SECONDS = 15;
+constexpr uint8_t MQTT_QOS = 1;
 
-    // Conectar ao WiFi
-    Serial.print("Conectando a ");
-    Serial.println(ssid);
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
-        Serial.print(".");
+#if MQTT_USE_TLS
+espMqttClientSecure mqttClient;
+#else
+espMqttClient mqttClient;
+#endif
+
+struct LeituraReservatorio {
+    int distanciaVazioCm;
+    float nivelAguaCm;
+    float volumeLitros;
+    int percentualNivel;
+};
+
+bool wifiConfigurado = false;
+bool mqttConfigurado = false;
+bool wifiEstavaConectado = false;
+bool primeiraTentativaWifi = true;
+bool primeiraTentativaMqtt = true;
+std::atomic<bool> publicarAposConectar{false};
+std::atomic<bool> mqttDesconectado{false};
+uint32_t ultimaTentativaWifiMs = 0;
+uint32_t ultimaTentativaMqttMs = 0;
+uint32_t ultimaPublicacaoMs = 0;
+
+bool intervaloDecorrido(uint32_t agora, uint32_t referencia, uint32_t intervalo) {
+    return static_cast<uint32_t>(agora - referencia) >= intervalo;
+}
+
+bool contemPlaceholder(const char* valor) {
+    return valor == nullptr || valor[0] == '\0' || strstr(valor, "SEU_") != nullptr ||
+           strstr(valor, "SUA_") != nullptr;
+}
+
+bool validarConfiguracaoWifi() {
+    if (contemPlaceholder(WIFI_SSID)) {
+        Serial.println("[CONFIG] Defina WIFI_SSID em secrets.h.");
+        return false;
     }
-    Serial.println("\nWiFi conectado.");
-    Serial.print("Endereço IP do ESP32: ");
-    Serial.println(WiFi.localIP());
+    return true;
 }
 
-void loop() {
-    distancia_vazio_cm = medirDistancia();
-    
-    // Calcular Nível da Água
-    // Subtrai a distância medida (do sensor até a água) da altura total da caixa
-    nivel_agua_cm = ALTURA_CAIXA_CM - distancia_vazio_cm;
+bool validarConfiguracaoMqtt() {
+    bool valida = true;
 
-    // Garantir que o nível não seja negativo ou maior que a capacidade total
-    if (nivel_agua_cm < 0) nivel_agua_cm = 0;
-    if (nivel_agua_cm > ALTURA_CAIXA_CM) nivel_agua_cm = ALTURA_CAIXA_CM;
+    if (contemPlaceholder(MQTT_HOST)) {
+        Serial.println("[CONFIG] Defina MQTT_HOST em secrets.h.");
+        valida = false;
+    }
+    if (MQTT_PORT == 0) {
+        Serial.println("[CONFIG] MQTT_PORT deve ser maior que zero.");
+        valida = false;
+    }
+    if (MQTT_PASSWORD[0] != '\0' && MQTT_USERNAME[0] == '\0') {
+        Serial.println("[CONFIG] MQTT_USERNAME e obrigatorio quando ha senha MQTT.");
+        valida = false;
+    }
+#if MQTT_USE_TLS
+    if (MQTT_CA_CERT[0] == '\0') {
+        Serial.println("[CONFIG] Defina MQTT_CA_CERT ao habilitar MQTT_USE_TLS.");
+        valida = false;
+    }
+#endif
 
-    // Calcular Percentual (%)
-    percentual_nivel = (nivel_agua_cm / ALTURA_CAIXA_CM) * 100;
-
-    // Calcular Volume (L x C x A)
-    // 1 Litro = 1000 cm³
-    volume_litros = (LARGURA_CAIXA_CM * COMPRIMENTO_CAIXA_CM * nivel_agua_cm) / 1000.0;
-
-    // Exibir no Serial Monitor (para debug)
-    Serial.print("Distancia Vazio: "); Serial.print(distancia_vazio_cm); Serial.println(" cm");
-    Serial.print("Nivel Agua: "); Serial.print(nivel_agua_cm); Serial.println(" cm");
-    Serial.print("Percentual: "); Serial.print(percentual_nivel); Serial.println(" %");
-    Serial.print("Volume: "); Serial.print(volume_litros); Serial.println(" Litros");
-    Serial.println("---");
-
-    // Enviar dados para o Backend
-    enviarDadosBackend(nivel_agua_cm, percentual_nivel, volume_litros);
-
-    // Aguardar 30 segundos antes da próxima leitura/envio
-    delay(30000); 
+    return valida;
 }
 
-// Função para medir a distância com o HC-SR04
-int medirDistancia() {
-    // Disparar o pulso TRIG
+void onMqttConnect(bool sessionPresent) {
+    Serial.print("[MQTT] Conectado. Sessao existente: ");
+    Serial.println(sessionPresent ? "sim" : "nao");
+
+    const uint16_t packetId =
+        mqttClient.publish(MQTT_STATUS_TOPIC, MQTT_QOS, true, MQTT_ONLINE_PAYLOAD);
+    if (packetId == 0) {
+        Serial.println("[MQTT] Falha ao publicar status online.");
+    } else {
+        Serial.print("[MQTT] Status online retido. Packet ID: ");
+        Serial.println(packetId);
+    }
+
+    publicarAposConectar.store(true);
+}
+
+void onMqttDisconnect(espMqttClientTypes::DisconnectReason reason) {
+    Serial.print("[MQTT] Desconectado. Motivo: ");
+    Serial.println(static_cast<int>(reason));
+
+    mqttDesconectado.store(true);
+}
+
+void configurarMqtt() {
+    mqttClient.onConnect(onMqttConnect);
+    mqttClient.onDisconnect(onMqttDisconnect);
+    mqttClient.setServer(MQTT_HOST, MQTT_PORT);
+    mqttClient.setClientId(MQTT_CLIENT_ID);
+    mqttClient.setKeepAlive(MQTT_KEEP_ALIVE_SECONDS);
+    mqttClient.setCleanSession(true);
+    mqttClient.setWill(MQTT_STATUS_TOPIC, MQTT_QOS, true, MQTT_OFFLINE_PAYLOAD);
+
+    if (MQTT_USERNAME[0] != '\0') {
+        mqttClient.setCredentials(MQTT_USERNAME, MQTT_PASSWORD);
+    }
+
+#if MQTT_USE_TLS
+    mqttClient.setCACert(MQTT_CA_CERT);
+#endif
+}
+
+void tentarConectarWifi(uint32_t agora) {
+    if (!wifiConfigurado || WiFi.status() == WL_CONNECTED) {
+        return;
+    }
+    if (!primeiraTentativaWifi &&
+        !intervaloDecorrido(agora, ultimaTentativaWifiMs, WIFI_RECONNECT_INTERVAL_MS)) {
+        return;
+    }
+
+    primeiraTentativaWifi = false;
+    ultimaTentativaWifiMs = agora;
+    Serial.print("[WIFI] Conectando a ");
+    Serial.println(WIFI_SSID);
+
+    if (WIFI_PASSWORD[0] == '\0') {
+        WiFi.begin(WIFI_SSID);
+    } else {
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    }
+}
+
+void tentarConectarMqtt(uint32_t agora) {
+    if (!mqttConfigurado || WiFi.status() != WL_CONNECTED ||
+        !mqttClient.disconnected()) {
+        return;
+    }
+    if (!primeiraTentativaMqtt &&
+        !intervaloDecorrido(agora, ultimaTentativaMqttMs, MQTT_RECONNECT_INTERVAL_MS)) {
+        return;
+    }
+
+    primeiraTentativaMqtt = false;
+    ultimaTentativaMqttMs = agora;
+    Serial.print("[MQTT] Conectando a ");
+    Serial.print(MQTT_HOST);
+    Serial.print(":");
+    Serial.println(MQTT_PORT);
+
+    if (!mqttClient.connect()) {
+        Serial.println("[MQTT] Nao foi possivel iniciar a conexao.");
+    }
+}
+
+bool medirReservatorio(LeituraReservatorio& leitura) {
     digitalWrite(TRIG_PIN, LOW);
     delayMicroseconds(2);
     digitalWrite(TRIG_PIN, HIGH);
     delayMicroseconds(10);
     digitalWrite(TRIG_PIN, LOW);
 
-    // Ler o pulso ECHO, mede a duração da viagem do som
-    duracao = pulseIn(ECHO_PIN, HIGH);
+    const unsigned long duracao = pulseIn(ECHO_PIN, HIGH, PULSE_TIMEOUT_US);
+    if (duracao == 0) {
+        Serial.println("[SENSOR] Leitura invalida: timeout aguardando eco.");
+        return false;
+    }
 
-    // Calcular a distância em CM (Velocidade do som: 0.0343 cm/uS)
-    int distancia_cm = duracao * 0.0343 / 2;
+    const float distanciaCalculadaCm = duracao * 0.0343F / 2.0F;
+    if (!isfinite(distanciaCalculadaCm) || distanciaCalculadaCm < DISTANCIA_MIN_CM ||
+        distanciaCalculadaCm > DISTANCIA_MAX_CM) {
+        Serial.print("[SENSOR] Leitura fora da faixa do HC-SR04: ");
+        Serial.print(distanciaCalculadaCm);
+        Serial.println(" cm");
+        return false;
+    }
 
-    // Limitar valores para evitar leituras estranhas
-    if (distancia_cm < DISTANCIA_MIN_CM) return DISTANCIA_MIN_CM;
-    if (distancia_cm > DISTANCIA_MAX_CM) return DISTANCIA_MAX_CM;
-    return distancia_cm;
+    leitura.distanciaVazioCm = static_cast<int>(distanciaCalculadaCm);
+    leitura.nivelAguaCm = ALTURA_CAIXA_CM - leitura.distanciaVazioCm;
+    if (leitura.nivelAguaCm < 0) {
+        leitura.nivelAguaCm = 0;
+    }
+    if (leitura.nivelAguaCm > ALTURA_CAIXA_CM) {
+        leitura.nivelAguaCm = ALTURA_CAIXA_CM;
+    }
+
+    leitura.percentualNivel =
+        static_cast<int>((leitura.nivelAguaCm / ALTURA_CAIXA_CM) * 100.0F);
+    leitura.volumeLitros =
+        (LARGURA_CAIXA_CM * COMPRIMENTO_CAIXA_CM * leitura.nivelAguaCm) / 1000.0F;
+
+    return true;
 }
 
-// Função para enviar dados via HTTP POST para o servidor Flask com retry
-void enviarDadosBackend(float nivel, int percentual, float volume) {
-    if (WiFi.status() == WL_CONNECTED) {
-        HTTPClient http;
-        http.begin(serverAddress);
-        http.addHeader("Content-Type", "application/json");
+void exibirLeitura(const LeituraReservatorio& leitura) {
+    Serial.print("[SENSOR] Distancia vazia: ");
+    Serial.print(leitura.distanciaVazioCm);
+    Serial.println(" cm");
+    Serial.print("[SENSOR] Nivel de agua: ");
+    Serial.print(leitura.nivelAguaCm);
+    Serial.println(" cm");
+    Serial.print("[SENSOR] Percentual: ");
+    Serial.print(leitura.percentualNivel);
+    Serial.println(" %");
+    Serial.print("[SENSOR] Volume: ");
+    Serial.print(leitura.volumeLitros);
+    Serial.println(" litros");
+}
 
-        // Criar o objeto JSON a ser enviado
-        StaticJsonDocument<200> doc;
-        doc["sensor_id"] = "ESP32_001";
-        doc["nivel_cm"] = nivel;
-        doc["capacidade_cm"] = ALTURA_CAIXA_CM;
-        doc["percentual"] = percentual;
-        doc["volume_litros"] = volume;
+void publicarLeitura() {
+    if (!mqttClient.connected()) {
+        return;
+    }
 
-        String jsonPayload;
-        serializeJson(doc, jsonPayload);
+    LeituraReservatorio leitura;
+    if (!medirReservatorio(leitura)) {
+        Serial.println("[MQTT] Publicacao ignorada por leitura invalida.");
+        return;
+    }
 
-        Serial.println("Enviando JSON para o servidor:");
-        Serial.println(jsonPayload);
+    exibirLeitura(leitura);
 
-        // Lógica de Retry (Tenta até 3 vezes)
-        int tentativas = 0;
-        int maxTentativas = 3;
-        bool sucesso = false;
+    StaticJsonDocument<256> documento;
+    documento["device_id"] = DEVICE_ID;
+    documento["nivel_cm"] = leitura.nivelAguaCm;
+    documento["capacidade_cm"] = ALTURA_CAIXA_CM;
+    documento["percentual"] = leitura.percentualNivel;
+    documento["volume_litros"] = leitura.volumeLitros;
 
-        while (tentativas < maxTentativas && !sucesso) {
-            int httpResponseCode = http.POST(jsonPayload);
+    char payload[256];
+    if (measureJson(documento) + 1 > sizeof(payload)) {
+        Serial.println("[MQTT] Payload excedeu o buffer local.");
+        return;
+    }
+    serializeJson(documento, payload, sizeof(payload));
 
-            if (httpResponseCode > 0) {
-                Serial.print("Codigo de resposta HTTP: ");
-                Serial.println(httpResponseCode);
-                sucesso = true;
-            } else {
-                tentativas++;
-                Serial.print("Erro no envio HTTP; Codigo: ");
-                Serial.print(httpResponseCode);
-                Serial.print(" - Tentativa ");
-                Serial.print(tentativas);
-                Serial.print(" de ");
-                Serial.println(maxTentativas);
-                
-                if (tentativas < maxTentativas) {
-                    delay(2000); // Aguarda 2 segundos antes de tentar novamente
-                }
-            }
+    const uint16_t packetId = mqttClient.publish(MQTT_DATA_TOPIC, MQTT_QOS, false, payload);
+    if (packetId == 0) {
+        Serial.println("[MQTT] Falha ao enfileirar leitura.");
+        return;
+    }
+
+    Serial.print("[MQTT] Leitura publicada em ");
+    Serial.print(MQTT_DATA_TOPIC);
+    Serial.print(". Packet ID: ");
+    Serial.println(packetId);
+    Serial.print("[MQTT] Payload: ");
+    Serial.println(payload);
+}
+
+void setup() {
+    Serial.begin(115200);
+    pinMode(TRIG_PIN, OUTPUT);
+    pinMode(ECHO_PIN, INPUT);
+    digitalWrite(TRIG_PIN, LOW);
+
+    wifiConfigurado = validarConfiguracaoWifi();
+    mqttConfigurado = validarConfiguracaoMqtt();
+    configurarMqtt();
+
+    WiFi.persistent(false);
+    WiFi.mode(WIFI_STA);
+    WiFi.setAutoReconnect(true);
+
+    tentarConectarWifi(millis());
+}
+
+void loop() {
+    const uint32_t agora = millis();
+    const bool wifiConectado = WiFi.status() == WL_CONNECTED;
+
+    if (mqttDesconectado.exchange(false)) {
+        ultimaTentativaMqttMs = agora;
+        primeiraTentativaMqtt = false;
+    }
+
+    if (!wifiConectado) {
+        if (wifiEstavaConectado) {
+            Serial.println("[WIFI] Conexao perdida; aguardando reconexao.");
         }
-        
-        if (!sucesso) {
-            Serial.println("Falha ao enviar dados apos 3 tentativas.");
-        }
+        wifiEstavaConectado = false;
+        tentarConectarWifi(agora);
+        return;
+    }
 
-        http.end(); // Fechar a conexão
-    } else {
-        Serial.println("Erro na conexao WiFi ao tentar enviar dados.");
+    if (!wifiEstavaConectado) {
+        wifiEstavaConectado = true;
+        primeiraTentativaMqtt = true;
+        Serial.print("[WIFI] Conectado. IP: ");
+        Serial.println(WiFi.localIP());
+    }
+
+    tentarConectarMqtt(agora);
+
+    if (!mqttClient.connected()) {
+        return;
+    }
+
+    if (publicarAposConectar.exchange(false) ||
+        intervaloDecorrido(agora, ultimaPublicacaoMs, PUBLISH_INTERVAL_MS)) {
+        ultimaPublicacaoMs = agora;
+        publicarLeitura();
     }
 }
