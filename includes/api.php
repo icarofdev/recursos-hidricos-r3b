@@ -52,17 +52,22 @@ function api_require_get(): void
     }
 }
 
-function api_device_id(): ?string
+function api_id(): ?int
 {
-    if (!isset($_GET['device_id']) || $_GET['device_id'] === '') {
+    if (!isset($_GET['id']) || $_GET['id'] === '') {
         return null;
     }
 
-    if (!is_string($_GET['device_id']) || !preg_match('/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/', $_GET['device_id'])) {
-        throw new HttpException(422, 'INVALID_DEVICE_ID', 'device_id possui formato invalido.');
+    if (!is_string($_GET['id']) || !preg_match('/^[1-9][0-9]*$/', $_GET['id'])) {
+        throw new HttpException(422, 'INVALID_ID', 'id deve ser um inteiro positivo.');
     }
 
-    return $_GET['device_id'];
+    $id = filter_var($_GET['id'], FILTER_VALIDATE_INT);
+    if ($id === false || $id <= 0) {
+        throw new HttpException(422, 'INVALID_ID', 'id deve ser um inteiro positivo.');
+    }
+
+    return (int) $id;
 }
 
 function api_integer_query(string $name, int $default, int $minimum, int $maximum): int

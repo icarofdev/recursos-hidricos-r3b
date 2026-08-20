@@ -136,18 +136,18 @@ while ($running) {
                 $databaseReconnectDelay = $config['reconnect_min'];
                 $databaseNeedsOperationProof = false;
                 $logger->info('MQTT', 'Message received.', [
-                    'device_id' => $result['device_id'],
+                    'id' => $result['id'],
                     'kind' => $result['kind'],
                     'retained' => $retained,
                 ]);
                 if (($result['stored'] ?? true) === false) {
                     $logger->info('DB', 'Retained status ignored until the first real device message.', [
-                        'device_id' => $result['device_id'],
+                        'id' => $result['id'],
                     ]);
                     return;
                 }
                 $logger->info('DB', $result['kind'] === 'data' ? 'Reading stored.' : 'Device status stored.', [
-                    'device_id' => $result['device_id'],
+                    'id' => $result['id'],
                 ]);
             } catch (ValidationException $exception) {
                 $logger->error('MQTT', 'Message rejected.', [

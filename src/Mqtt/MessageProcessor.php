@@ -21,7 +21,7 @@ final class MessageProcessor
         $this->utc = new DateTimeZone('UTC');
     }
 
-    /** @return array{kind:string,device_id:string,status?:string,retained?:bool,stored?:bool} */
+    /** @return array{kind:string,id:int,status?:string,retained?:bool,stored?:bool} */
     public function process(
         string $topic,
         string $payload,
@@ -38,32 +38,32 @@ final class MessageProcessor
             $reading = $this->validator->validateData($topic, $payload, $this->dataTopicFilter);
             $this->repository->storeReading($reading, $receivedAt);
 
-            return ['kind' => 'data', 'device_id' => $reading['device_id']];
+            return ['kind' => 'data', 'id' => $reading['id']];
         }
 
         if (TopicMatcher::deviceId($topic, $this->statusTopicFilter) !== null) {
             $status = $this->validator->validateStatus($topic, $payload, $this->statusTopicFilter);
             if ($retained) {
                 $stored = $this->repository->storeRetainedStatus(
-                    $status['device_id'],
+                    $status['id'],
                     $status['status'],
                     $receivedAt
                 );
 
                 return [
                     'kind' => 'status',
-                    'device_id' => $status['device_id'],
+                    'id' => $status['id'],
                     'status' => $status['status'],
                     'retained' => true,
                     'stored' => $stored,
                 ];
             }
 
-            $this->repository->storeStatus($status['device_id'], $status['status'], $receivedAt);
+            $this->repository->storeStatus($status['id'], $status['status'], $receivedAt);
 
             return [
                 'kind' => 'status',
-                'device_id' => $status['device_id'],
+                'id' => $status['id'],
                 'status' => $status['status'],
             ];
         }

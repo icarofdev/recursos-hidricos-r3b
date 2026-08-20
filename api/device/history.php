@@ -7,20 +7,20 @@ require_once __DIR__ . '/_bootstrap.php';
 api_run(static function (): void {
     api_require_get();
 
-    $deviceId = api_device_id();
+    $id = api_id();
     $repository = api_repository();
-    if ($deviceId !== null && $repository->status($deviceId) === null) {
+    if ($id !== null && $repository->status($id) === null) {
         throw new R3B\Http\HttpException(404, 'DEVICE_NOT_FOUND', 'Dispositivo nao encontrado.');
     }
     $hours = api_integer_query('hours', 24, 1, 720);
     $limit = api_integer_query('limit', 500, 1, 2000);
     $since = (new DateTimeImmutable('now', new DateTimeZone('UTC')))
         ->sub(new DateInterval(sprintf('PT%dH', $hours)));
-    $history = $repository->history($deviceId, $since, $limit);
+    $history = $repository->history($id, $since, $limit);
 
     api_json([
         'success' => true,
-        'device_id' => $history['device_id'],
+        'id' => $history['id'],
         'count' => count($history['data']),
         'data' => $history['data'],
     ]);

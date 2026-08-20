@@ -17,7 +17,10 @@ function mqtt_config(): array
         static fn (string $deviceId): bool => $deviceId !== ''
     )));
     foreach ($allowedDevices as $deviceId) {
-        if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/', $deviceId)) {
+        if (
+            !preg_match('/^[1-9][0-9]*$/', $deviceId)
+            || filter_var($deviceId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false
+        ) {
             throw new RuntimeException('MQTT_ALLOWED_DEVICE_IDS contem um identificador invalido.');
         }
     }

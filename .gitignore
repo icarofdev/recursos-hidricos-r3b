@@ -8,7 +8,6 @@
 /logs/
 *.log
 
-assets/ino/secrets.h
 *.db-journal
 *.db-shm
 *.db-wal

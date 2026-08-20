@@ -4,7 +4,7 @@ const dashboardState = {
     history: [],
     backendAlerts: [],
     selectedRangeHours: 24,
-    selectedMetric: 'nivel',
+    selectedMetric: 'consumo',
     currentPage: 1,
     pageSize: 7,
     refreshMilliseconds: 5000,
@@ -36,6 +36,13 @@ const RANGE_LIMITS = {
     24: 300,
     168: 800,
     720: 1600
+};
+
+const CHART_METRICS = {
+    consumo: { label: 'Consumo', suffix: '', beginAtZero: true },
+    vazao: { label: 'Vazão', suffix: '', beginAtZero: true },
+    ppl: { label: 'PPL', suffix: '', beginAtZero: true },
+    rssi_wifi: { label: 'RSSI Wi-Fi', suffix: ' dBm', beginAtZero: false }
 };
 
 let historyChart = null;
@@ -143,18 +150,18 @@ function getRangeHistory() {
     });
 }
 
-function getReservoirStatus(percentual) {
-    const value = Number(percentual);
+function getSignalStatus(rssiWifi) {
+    const value = Number(rssiWifi);
     if (!Number.isFinite(value)) {
-        return { label: 'Aguardando', description: 'Sem classificação', className: 'is-waiting' };
+        return { label: 'Aguardando', description: 'Sem sinal informado', className: 'is-waiting' };
     }
-    if (value < 20) {
-        return { label: 'Crítico', description: 'Nível crítico — reabastecimento necessário', className: 'is-critical' };
+    if (value < -85) {
+        return { label: 'Sinal fraco', description: 'RSSI Wi-Fi baixo', className: 'is-critical' };
     }
-    if (value < 50) {
-        return { label: 'Atenção', description: 'Nível abaixo do recomendado', className: 'is-warning' };
+    if (value < -70) {
+        return { label: 'Sinal regular', description: 'RSSI Wi-Fi regular', className: 'is-warning' };
     }
-    return { label: 'Normal', description: 'Volume dentro da faixa recomendada', className: 'is-normal' };
+    return { label: 'Sinal bom', description: 'RSSI Wi-Fi bom', className: 'is-normal' };
 }
 
 function getDeviceLastSeen() {
@@ -168,7 +175,7 @@ function compactHistoryForRange(history, hours = dashboardState.selectedRangeHou
     history.forEach(item => {
         const date = parseDate(item?.timestamp);
         if (!date || date.getTime() < cutoff) return;
-        const deviceId = item.sensor_id || item.device_id || 'unknown';
+        const deviceId = item.id || 'unknown';
         const key = `${deviceId}:${date.getTime()}`;
         readingsByKey.set(key, item);
     });
@@ -192,7 +199,7 @@ function shouldRefreshFullHistory(hours = dashboardState.selectedRangeHours) {
 }
 
 function getMonitoredDeviceId() {
-    return dashboardState.device?.id || dashboardState.latest?.sensor_id || null;
+    return dashboardState.device?.id || dashboardState.latest?.id || null;
 }
 
 function isDeviceDisconnected() {
@@ -200,88 +207,10 @@ function isDeviceDisconnected() {
     return backendStatus !== 'online';
 }
 
-function hasAbruptDrop(history = dashboardState.history) {
-    const ordered = getChronologicalHistory(history);
-    for (let index = Math.max(1, ordered.length - 8); index < ordered.length; index += 1) {
-        const previous = ordered[index - 1];
-        const current = ordered[index];
-        const previousDate = parseDate(previous.timestamp);
-        const currentDate = parseDate(current.timestamp);
-        const elapsedHours = (currentDate - previousDate) / 36e5;
-        const drop = Number(previous.percentual) - Number(current.percentual);
-
-        if (elapsedHours > 0 && elapsedHours <= 0.5 && drop >= 10) return true;
-    }
-    return false;
-}
-
-function calculateConsumption(history) {
-    const ordered = getChronologicalHistory(history);
-    let total = 0;
-    let validIntervals = 0;
-    const series = [];
-
-    ordered.forEach((item, index) => {
-        if (index === 0) {
-            series.push(0);
-            return;
-        }
-
-        const previousVolume = Number(ordered[index - 1].volume_litros);
-        const currentVolume = Number(item.volume_litros);
-        if (!Number.isFinite(previousVolume) || !Number.isFinite(currentVolume)) {
-            series.push(total);
-            return;
-        }
-
-        const delta = previousVolume - currentVolume;
-        if (delta > 0) total += delta;
-        validIntervals += 1;
-        series.push(total);
-    });
-
-    return {
-        total,
-        series,
-        hasData: ordered.length >= 2 && validIntervals > 0
-    };
-}
-
-function calculateTrend(history = dashboardState.history) {
-    const ordered = getChronologicalHistory(history);
-    if (ordered.length < 2) {
-        return { label: 'Sem tendência', context: 'Histórico insuficiente', direction: 'neutral' };
-    }
-
-    const recent = ordered.slice(-12);
-    const first = recent[0];
-    const last = recent[recent.length - 1];
-    const firstDate = parseDate(first.timestamp);
-    const lastDate = parseDate(last.timestamp);
-    const hours = (lastDate - firstDate) / 36e5;
-    const firstLevel = Number(first.percentual);
-    const lastLevel = Number(last.percentual);
-
-    if (hours <= 0 || !Number.isFinite(firstLevel) || !Number.isFinite(lastLevel)) {
-        return { label: 'Sem tendência', context: 'Histórico insuficiente', direction: 'neutral' };
-    }
-
-    const rate = (lastLevel - firstLevel) / hours;
-    if (rate < -0.1) {
-        return {
-            label: 'Em queda',
-            context: `${formatNumber(Math.abs(rate), 1)} ponto percentual por hora`,
-            direction: 'falling'
-        };
-    }
-    if (rate > 0.1) {
-        return {
-            label: 'Reabastecendo',
-            context: `${formatNumber(rate, 1)} ponto percentual por hora`,
-            direction: 'rising'
-        };
-    }
-    return { label: 'Estável', context: 'Sem variação relevante', direction: 'stable' };
+function signalStrengthPercentage(rssiWifi) {
+    const value = Number(rssiWifi);
+    if (!Number.isFinite(value)) return 0;
+    return clamp((value + 100) * 2, 0, 100);
 }
 
 function setStatusDot(element, statusClass) {
@@ -335,7 +264,6 @@ function renderSystemStatus() {
     const latest = dashboardState.latest;
     const latestDate = latest ? parseDate(latest.timestamp) : null;
     const lastSeen = parseDate(getDeviceLastSeen());
-    const percentual = latest ? Number(latest.percentual) : NaN;
 
     container.className = 'system-status';
     time.textContent = lastSeen ? formatElapsed(lastSeen) : latestDate ? formatElapsed(latestDate) : 'Sem leitura';
@@ -386,47 +314,26 @@ function renderSystemStatus() {
         return;
     }
 
-    if (Number.isFinite(percentual) && percentual < 20) {
-        container.classList.add('is-critical');
-        title.textContent = 'Nível de água crítico';
-        description.textContent = 'O reservatório está abaixo de 20%. Verifique o abastecimento imediatamente.';
-        return;
-    }
-
-    if (hasAbruptDrop()) {
-        container.classList.add('is-warning');
-        title.textContent = 'Possível interrupção ou consumo atípico';
-        description.textContent = 'Foi detectada uma queda rápida nas leituras mais recentes.';
-        return;
-    }
-
-    if (Number.isFinite(percentual) && percentual < 50) {
-        container.classList.add('is-warning');
-        title.textContent = 'Nível abaixo do recomendado';
-        description.textContent = 'Há água disponível, mas o reservatório está abaixo de 50% da capacidade em altura.';
-        return;
-    }
-
     title.textContent = 'Sistema funcionando normalmente';
-    description.textContent = 'Dispositivo conectado e nível de água dentro da faixa recomendada.';
+    description.textContent = 'Dispositivo conectado e telemetria SM-WA recebida pelo backend.';
 }
 
 function renderLatest() {
     const latest = dashboardState.latest;
-    const tank = getElement('tank-visual');
-    const tankWater = getElement('tank-water');
-    const statusBadge = getElement('reservoir-status');
+    const signalVisual = getElement('signal-visual');
+    const signalFill = getElement('signal-fill');
+    const statusBadge = getElement('telemetry-status');
 
     if (!latest) {
         document.documentElement.style.setProperty('--water-level', '0%');
-        tank.setAttribute('aria-label', 'Nível do reservatório sem leitura disponível');
-        tankWater.className = 'tank-water';
+        signalVisual.setAttribute('aria-label', 'Sinal Wi-Fi sem leitura disponível');
+        signalFill.className = 'tank-water';
         statusBadge.className = 'status-badge is-waiting';
         statusBadge.textContent = 'Aguardando';
-        getElement('level-reading').textContent = '—';
-        getElement('level-height').textContent = '—';
-        getElement('volume-reading').textContent = '—';
-        getElement('level-classification').textContent = 'Aguardando classificação';
+        getElement('consumption-reading').textContent = '—';
+        getElement('flow-reading').textContent = '—';
+        getElement('wifi-reading').textContent = '—';
+        getElement('telemetry-classification').textContent = 'Aguardando telemetria';
         getElement('monitored-device').textContent = dashboardState.device?.id
             ? `Dispositivo ${dashboardState.device.id} · Sem leitura atual`
             : 'Nenhum dispositivo identificado';
@@ -434,47 +341,39 @@ function renderLatest() {
         return;
     }
 
-    const percentual = Number(latest.percentual);
-    const nivelCm = Number(latest.nivel_cm);
-    const capacidadeCm = Number(latest.capacidade_cm);
-    const volume = Number(latest.volume_litros);
-    const safePercentual = Number.isFinite(percentual) ? clamp(percentual, 0, 100) : 0;
-    const status = getReservoirStatus(percentual);
+    const consumo = Number(latest.consumo);
+    const vazao = Number(latest.vazao);
+    const rssiWifi = Number(latest.rssi_wifi);
+    const status = getSignalStatus(rssiWifi);
     const sensorName = getMonitoredDeviceId() || 'Dispositivo sem identificação';
 
-    document.documentElement.style.setProperty('--water-level', `${safePercentual}%`);
-    tank.setAttribute('aria-label', `Nível atual do reservatório: ${formatNumber(percentual, 0)} por cento. Estado: ${status.label}.`);
-    tankWater.className = `tank-water ${status.className}`;
+    document.documentElement.style.setProperty('--water-level', `${signalStrengthPercentage(rssiWifi)}%`);
+    signalVisual.setAttribute('aria-label', `RSSI Wi-Fi: ${formatNumber(rssiWifi)} dBm. Estado: ${status.label}.`);
+    signalFill.className = `tank-water ${status.className}`;
     statusBadge.className = `status-badge ${status.className}`;
     statusBadge.textContent = status.label;
-    getElement('level-reading').textContent = Number.isFinite(percentual) ? `${formatNumber(percentual, 0)}%` : '—';
-    getElement('level-classification').textContent = status.description;
-    getElement('level-height').textContent = Number.isFinite(nivelCm) && Number.isFinite(capacidadeCm)
-        ? `${formatNumber(nivelCm)} de ${formatNumber(capacidadeCm)} cm`
-        : 'Não informado';
-    getElement('volume-reading').textContent = Number.isFinite(volume) ? `${formatNumber(volume)} L` : 'Não informado';
-    getElement('monitored-device').textContent = `Dispositivo ${sensorName} · Local não informado`;
+    getElement('consumption-reading').textContent = Number.isFinite(consumo) ? formatNumber(consumo, 2) : '—';
+    getElement('telemetry-classification').textContent = 'Valor de consumo informado pelo SM-WA';
+    getElement('flow-reading').textContent = Number.isFinite(vazao) ? formatNumber(vazao, 2) : 'Não informado';
+    getElement('wifi-reading').textContent = Number.isFinite(rssiWifi) ? `${formatNumber(rssiWifi)} dBm` : 'Não informado';
+    getElement('monitored-device').textContent = `Dispositivo SM-WA ${sensorName}`;
     getElement('metric-timestamp').textContent = formatDateTime(latest.timestamp);
 }
 
 function renderMetrics() {
-    const todayHistory = getChronologicalHistory().filter(item => {
-        const date = parseDate(item.timestamp);
-        return date && date.toDateString() === new Date().toDateString();
-    });
-    const consumption = calculateConsumption(todayHistory);
-    const trend = calculateTrend();
+    const latest = dashboardState.latest;
     const device = dashboardState.device;
     const lastSeen = parseDate(getDeviceLastSeen());
 
-    getElement('daily-consumption').textContent = consumption.hasData ? formatNumber(consumption.total) : '—';
-    getElement('daily-consumption-unit').textContent = consumption.hasData ? 'litros' : 'sem dados suficientes';
-    getElement('consumption-context').textContent = consumption.hasData
-        ? 'Estimado pelas reduções de volume desde 00:00'
-        : 'São necessárias ao menos duas leituras de hoje';
-
-    getElement('trend-reading').textContent = trend.label;
-    getElement('trend-context').textContent = trend.context;
+    getElement('ppl-reading').textContent = latest ? formatNumber(latest.ppl, 2) : '—';
+    getElement('ppl-unit').textContent = latest ? 'valor informado' : 'sem leitura';
+    getElement('ppl-context').textContent = latest
+        ? 'Campo ppl recebido diretamente do dispositivo'
+        : 'Aguardando leitura do dispositivo';
+    getElement('flow-metric').textContent = latest ? formatNumber(latest.vazao, 2) : '—';
+    getElement('flow-context').textContent = latest ? 'Campo vazao recebido do SM-WA' : 'Aguardando leitura';
+    getElement('consumption-metric').textContent = latest ? formatNumber(latest.consumo, 2) : '—';
+    getElement('rssi-metric').textContent = latest ? `${formatNumber(latest.rssi_wifi)} dBm` : '—';
 
     if (dashboardState.statusError) {
         getElement('device-state-reading').textContent = 'Indisponível';
@@ -524,7 +423,7 @@ function initializeChart() {
         data: {
             labels: [],
             datasets: [{
-                label: 'Nível',
+                label: 'Consumo',
                 data: [],
                 borderColor: '#1598ad',
                 backgroundColor: 'rgba(21, 152, 173, 0.08)',
@@ -554,9 +453,8 @@ function initializeChart() {
                     cornerRadius: 7,
                     callbacks: {
                         label(context) {
-                            const suffix = dashboardState.selectedMetric === 'nivel' ? '%' : ' L';
-                            const label = dashboardState.selectedMetric === 'nivel' ? 'Nível' : 'Consumo acumulado';
-                            return `${label}: ${formatNumber(context.parsed.y)}${suffix}`;
+                            const metric = CHART_METRICS[dashboardState.selectedMetric] || CHART_METRICS.consumo;
+                            return `${metric.label}: ${formatNumber(context.parsed.y, 2)}${metric.suffix}`;
                         }
                     }
                 }
@@ -569,13 +467,12 @@ function initializeChart() {
                 },
                 y: {
                     beginAtZero: true,
-                    max: 100,
                     border: { display: false },
                     grid: { color: '#e6edf0', drawTicks: false },
                     ticks: {
                         padding: 9,
                         maxTicksLimit: 5,
-                        callback: value => `${value}%`
+                        callback: value => formatNumber(value, 0)
                     }
                 }
             }
@@ -586,13 +483,7 @@ function initializeChart() {
 function renderChart() {
     const metric = dashboardState.selectedMetric;
     const rangeHistory = getRangeHistory();
-
-    if (metric === 'vazao' || metric === 'pressao') {
-        const label = metric === 'vazao' ? 'vazão' : 'pressão';
-        showChartState(`${label[0].toUpperCase()}${label.slice(1)} indisponível`, `O contrato atual da API não fornece dados de ${label}. Nenhum valor foi estimado ou simulado.`, '—');
-        getElement('chart-summary').textContent = `Resumo: o sensor de ${label} ainda não está integrado ao sistema.`;
-        return;
-    }
+    const metricDefinition = CHART_METRICS[metric] || CHART_METRICS.consumo;
 
     if (dashboardState.historyError) {
         showChartState('Erro ao carregar o gráfico', 'O histórico não pôde ser consultado. A dashboard tentará novamente automaticamente.', '!');
@@ -611,43 +502,24 @@ function renderChart() {
         return;
     }
 
-    let values;
-    let datasetLabel;
-    let axisSuffix;
-    let summary;
-
-    if (metric === 'consumo') {
-        const consumption = calculateConsumption(rangeHistory);
-        if (!consumption.hasData) {
-            showChartState('Histórico insuficiente', 'São necessárias ao menos duas leituras de volume para calcular o consumo.', '—');
-            getElement('chart-summary').textContent = 'Resumo: o consumo não pode ser calculado com os registros disponíveis.';
-            return;
-        }
-        values = consumption.series;
-        datasetLabel = 'Consumo acumulado';
-        axisSuffix = ' L';
-        summary = `Consumo estimado no período: ${formatNumber(consumption.total)} litros, calculado somente a partir das reduções de volume registradas.`;
-    } else {
-        const validLevels = rangeHistory.map(item => Number(item.percentual)).filter(Number.isFinite);
-        if (!validLevels.length) {
-            showChartState('Nível indisponível', 'Os registros do período não possuem percentual de nível válido.', '—');
-            getElement('chart-summary').textContent = 'Resumo: nenhum percentual de nível válido foi encontrado.';
-            return;
-        }
-        values = rangeHistory.map(item => Number.isFinite(Number(item.percentual)) ? Number(item.percentual) : null);
-        datasetLabel = 'Nível';
-        axisSuffix = '%';
-        const latestLevel = validLevels[validLevels.length - 1];
-        summary = `Nível atual de ${formatNumber(latestLevel, 0)}%, variando entre ${formatNumber(Math.min(...validLevels), 0)}% e ${formatNumber(Math.max(...validLevels), 0)}% no período.`;
+    const validValues = rangeHistory.map(item => Number(item[metric])).filter(Number.isFinite);
+    if (!validValues.length) {
+        showChartState(`${metricDefinition.label} indisponível`, `Os registros do período não possuem valores válidos para ${metricDefinition.label}.`, '—');
+        getElement('chart-summary').textContent = `Resumo: nenhum valor de ${metricDefinition.label} foi encontrado.`;
+        return;
     }
 
+    const values = rangeHistory.map(item => Number.isFinite(Number(item[metric])) ? Number(item[metric]) : null);
+    const latestValue = validValues[validValues.length - 1];
+    const summary = `${metricDefinition.label}: valor atual ${formatNumber(latestValue, 2)}${metricDefinition.suffix}; mínimo ${formatNumber(Math.min(...validValues), 2)}${metricDefinition.suffix} e máximo ${formatNumber(Math.max(...validValues), 2)}${metricDefinition.suffix} no período.`;
+
     historyChart.data.labels = rangeHistory.map(item => formatChartLabel(item.timestamp));
-    historyChart.data.datasets[0].label = datasetLabel;
+    historyChart.data.datasets[0].label = metricDefinition.label;
     historyChart.data.datasets[0].data = values;
-    historyChart.options.scales.y.max = metric === 'nivel' ? 100 : undefined;
-    historyChart.options.scales.y.ticks.callback = value => `${formatNumber(value, 0)}${axisSuffix}`;
+    historyChart.options.scales.y.beginAtZero = metricDefinition.beginAtZero;
+    historyChart.options.scales.y.ticks.callback = value => `${formatNumber(value, 0)}${metricDefinition.suffix}`;
     historyChart.update();
-    getElement('history-chart').setAttribute('aria-label', `${datasetLabel} ao longo do período selecionado. ${summary}`);
+    getElement('history-chart').setAttribute('aria-label', `${metricDefinition.label} ao longo do período selecionado. ${summary}`);
     getElement('chart-summary').textContent = summary;
     hideChartState();
 }
@@ -655,9 +527,6 @@ function renderChart() {
 function getAlertTitle(alert) {
     const message = String(alert.message || '');
     if (/offline|comunica|dispositivo/i.test(message)) return 'Dispositivo offline';
-    if (/nível|nivel|água|agua/i.test(message)) {
-        return alert.type === 'critical' ? 'Nível crítico' : 'Nível baixo';
-    }
     return 'Evento do sistema';
 }
 
@@ -671,22 +540,9 @@ function normalizeAlerts() {
         title: getAlertTitle(alert),
         message: alert.message || 'Alerta informado pela API.',
         timestamp: alert.timestamp || latestDate,
-        sensorId: alert.device_id || sensorId,
+        sensorId: alert.id || sensorId,
         state: 'Pendente'
     }));
-
-    const percentual = latest ? Number(latest.percentual) : NaN;
-    const hasLevelAlert = alerts.some(alert => /nível|nivel|água|agua/i.test(alert.title + alert.message));
-    if (!hasLevelAlert && Number.isFinite(percentual) && percentual < 50) {
-        alerts.push({
-            type: percentual < 20 ? 'critical' : 'warning',
-            title: percentual < 20 ? 'Nível crítico' : 'Nível baixo',
-            message: percentual < 20 ? 'Reservatório abaixo de 20%.' : 'Reservatório abaixo de 50%.',
-            timestamp: latestDate,
-            sensorId,
-            state: 'Pendente'
-        });
-    }
 
     const hasConfirmedCommunicationFailure = dashboardState.device
         ? isDeviceDisconnected()
@@ -699,17 +555,6 @@ function normalizeAlerts() {
                 ? `Nenhuma nova comunicação ${formatElapsed(lastSeen)}.`
                 : 'Nenhuma comunicação foi registrada para o dispositivo.',
             timestamp: lastSeen || latestDate,
-            sensorId,
-            state: 'Pendente'
-        });
-    }
-
-    if (hasAbruptDrop()) {
-        alerts.push({
-            type: 'warning',
-            title: 'Queda rápida de nível',
-            message: 'Redução de ao menos 10 pontos percentuais em até 30 minutos.',
-            timestamp: latestDate,
             sensorId,
             state: 'Pendente'
         });
@@ -796,9 +641,11 @@ function renderDevice() {
         detailsButton.textContent = 'Ver detalhes';
         detailsButton.setAttribute('aria-expanded', 'false');
         details.hidden = true;
-        getElement('detail-sensor-id').textContent = '—';
+        getElement('detail-device-id').textContent = '—';
         getElement('detail-last-reading').textContent = '—';
-        getElement('detail-capacity').textContent = '—';
+        getElement('detail-ppl').textContent = '—';
+        getElement('detail-vazao').textContent = '—';
+        getElement('detail-rssi').textContent = '—';
         return;
     }
 
@@ -820,11 +667,11 @@ function renderDevice() {
         dashboardState.statusError || disconnected ? 'is-error' : device ? '' : 'is-waiting'
     );
     detailsButton.disabled = false;
-    getElement('detail-sensor-id').textContent = sensorId;
+    getElement('detail-device-id').textContent = sensorId;
     getElement('detail-last-reading').textContent = latest ? formatDateTime(latest.timestamp) : 'Sem leitura atual';
-    getElement('detail-capacity').textContent = latest && Number.isFinite(Number(latest.capacidade_cm))
-        ? `${formatNumber(latest.capacidade_cm)} cm`
-        : 'Não informada';
+    getElement('detail-ppl').textContent = latest ? formatNumber(latest.ppl, 2) : 'Não informado';
+    getElement('detail-vazao').textContent = latest ? formatNumber(latest.vazao, 2) : 'Não informada';
+    getElement('detail-rssi').textContent = latest ? `${formatNumber(latest.rssi_wifi)} dBm` : 'Não informado';
 }
 
 function renderHistoryTable() {
@@ -859,10 +706,11 @@ function renderHistoryTable() {
     getElement('history-table-body').innerHTML = pageItems.map(item => `
         <tr>
             <td data-label="Data e hora"><strong>${escapeHTML(formatDateTime(item.timestamp))}</strong></td>
-            <td data-label="Dispositivo">${escapeHTML(item.sensor_id || 'Não identificado')}</td>
-            <td data-label="Nível" class="numeric">${Number.isFinite(Number(item.percentual)) ? `${escapeHTML(formatNumber(item.percentual, 0))}%` : '—'}</td>
-            <td data-label="Altura" class="numeric">${Number.isFinite(Number(item.nivel_cm)) ? `${escapeHTML(formatNumber(item.nivel_cm))} cm` : '—'}</td>
-            <td data-label="Volume" class="numeric">${Number.isFinite(Number(item.volume_litros)) ? `${escapeHTML(formatNumber(item.volume_litros))} L` : '—'}</td>
+            <td data-label="Dispositivo">${escapeHTML(item.id || 'Não identificado')}</td>
+            <td data-label="PPL" class="numeric">${Number.isFinite(Number(item.ppl)) ? escapeHTML(formatNumber(item.ppl, 2)) : '—'}</td>
+            <td data-label="Vazão" class="numeric">${Number.isFinite(Number(item.vazao)) ? escapeHTML(formatNumber(item.vazao, 2)) : '—'}</td>
+            <td data-label="Consumo" class="numeric">${Number.isFinite(Number(item.consumo)) ? escapeHTML(formatNumber(item.consumo, 2)) : '—'}</td>
+            <td data-label="RSSI Wi-Fi" class="numeric">${Number.isFinite(Number(item.rssi_wifi)) ? `${escapeHTML(formatNumber(item.rssi_wifi))} dBm` : '—'}</td>
         </tr>
     `).join('');
 
@@ -929,7 +777,7 @@ function normalizeReading(reading, fallbackDeviceId = null) {
     }
     return {
         ...reading,
-        sensor_id: reading.sensor_id || reading.device_id || fallbackDeviceId || null
+        id: reading.id || fallbackDeviceId || null
     };
 }
 
@@ -956,7 +804,7 @@ async function fetchHistoryData(hours = dashboardState.selectedRangeHours) {
     const payload = await requestJSON(`${API_ENDPOINTS.history}?${query}`);
     requireSuccessfulPayload(payload, 'history');
     if (!Array.isArray(payload.data)) throw new Error('Histórico inválido recebido da API');
-    return payload.data.map(item => normalizeReading(item, payload.device_id));
+    return payload.data.map(item => normalizeReading(item, payload.id));
 }
 
 async function fetchAlertsData() {

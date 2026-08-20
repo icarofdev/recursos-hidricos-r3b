@@ -19,63 +19,53 @@ final class PayloadValidator
         $this->allowedDeviceIds = array_values($allowedDeviceIds);
     }
 
-    /** @return array{device_id:string,nivel_cm:float,capacidade_cm:float,percentual:float,volume_litros:float} */
+    /** @return array{id:int,ppl:float,vazao:float,consumo:float,rssi_wifi:float} */
     public function validateData(string $topic, string $payload, string $topicFilter): array
     {
         $data = $this->decodeObject($payload);
+        $this->rejectUnknownFields($data, ['id', 'ppl', 'vazao', 'consumo', 'rssi_wifi']);
         $topicDeviceId = TopicMatcher::deviceId($topic, $topicFilter);
         if ($topicDeviceId === null) {
             throw new ValidationException('Topico de dados nao corresponde ao filtro configurado.');
         }
 
-        $deviceId = $this->validateDeviceId($data['device_id'] ?? null);
-        if (!hash_equals($topicDeviceId, $deviceId)) {
-            throw new ValidationException('device_id nao corresponde ao identificador do topico.');
+        $deviceId = $this->validateDeviceId($data['id'] ?? null);
+        if (!hash_equals($topicDeviceId, (string) $deviceId)) {
+            throw new ValidationException('id nao corresponde ao identificador do topico.');
         }
 
-        $nivel = $this->requiredNumber($data, 'nivel_cm');
-        $capacidade = $this->requiredNumber($data, 'capacidade_cm');
-        $percentual = $this->requiredNumber($data, 'percentual');
-        $volume = $this->requiredNumber($data, 'volume_litros');
+        $ppl = $this->requiredNumber($data, 'ppl');
+        $vazao = $this->requiredNumber($data, 'vazao');
+        $consumo = $this->requiredNumber($data, 'consumo');
+        $rssiWifi = $this->requiredNumber($data, 'rssi_wifi');
 
-        if ($capacidade <= 0 || $capacidade > 100000) {
-            throw new ValidationException('capacidade_cm esta fora da faixa permitida.');
-        }
-        if ($nivel < 0 || $nivel > $capacidade) {
-            throw new ValidationException('nivel_cm deve estar entre zero e capacidade_cm.');
-        }
-        if ($percentual < 0 || $percentual > 100) {
-            throw new ValidationException('percentual deve estar entre zero e 100.');
-        }
-        $expectedPercentage = ($nivel / $capacidade) * 100;
-        if (abs($percentual - $expectedPercentage) > 1.01) {
-            throw new ValidationException('percentual nao corresponde a nivel_cm e capacidade_cm.');
-        }
-        if ($volume < 0 || $volume > 1000000000) {
-            throw new ValidationException('volume_litros esta fora da faixa permitida.');
-        }
+        $this->validateRange('ppl', $ppl, 0, 1000000000);
+        $this->validateRange('vazao', $vazao, 0, 1000000000000);
+        $this->validateRange('consumo', $consumo, 0, 1000000000000);
+        $this->validateRange('rssi_wifi', $rssiWifi, -200, 0);
 
         return [
-            'device_id' => $deviceId,
-            'nivel_cm' => $nivel,
-            'capacidade_cm' => $capacidade,
-            'percentual' => $percentual,
-            'volume_litros' => $volume,
+            'id' => $deviceId,
+            'ppl' => $ppl,
+            'vazao' => $vazao,
+            'consumo' => $consumo,
+            'rssi_wifi' => $rssiWifi,
         ];
     }
 
-    /** @return array{device_id:string,status:string} */
+    /** @return array{id:int,status:string} */
     public function validateStatus(string $topic, string $payload, string $topicFilter): array
     {
         $data = $this->decodeObject($payload);
+        $this->rejectUnknownFields($data, ['id', 'status']);
         $topicDeviceId = TopicMatcher::deviceId($topic, $topicFilter);
         if ($topicDeviceId === null) {
             throw new ValidationException('Topico de status nao corresponde ao filtro configurado.');
         }
 
-        $deviceId = $this->validateDeviceId($data['device_id'] ?? null);
-        if (!hash_equals($topicDeviceId, $deviceId)) {
-            throw new ValidationException('device_id nao corresponde ao identificador do topico.');
+        $deviceId = $this->validateDeviceId($data['id'] ?? null);
+        if (!hash_equals($topicDeviceId, (string) $deviceId)) {
+            throw new ValidationException('id nao corresponde ao identificador do topico.');
         }
 
         $status = $data['status'] ?? null;
@@ -83,7 +73,7 @@ final class PayloadValidator
             throw new ValidationException('status deve ser online ou offline.');
         }
 
-        return ['device_id' => $deviceId, 'status' => $status];
+        return ['id' => $deviceId, 'status' => $status];
     }
 
     /** @return array<string, mixed> */
@@ -106,13 +96,13 @@ final class PayloadValidator
         return $decoded;
     }
 
-    private function validateDeviceId(mixed $value): string
+    private function validateDeviceId(mixed $value): int
     {
-        if (!is_string($value) || !preg_match('/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/', $value)) {
-            throw new ValidationException('device_id possui formato invalido.');
+        if (!is_int($value) || $value <= 0) {
+            throw new ValidationException('id deve ser um inteiro positivo.');
         }
-        if ($this->allowedDeviceIds !== [] && !in_array($value, $this->allowedDeviceIds, true)) {
-            throw new ValidationException('device_id nao esta autorizado.');
+        if ($this->allowedDeviceIds !== [] && !in_array((string) $value, $this->allowedDeviceIds, true)) {
+            throw new ValidationException('id nao esta autorizado.');
         }
 
         return $value;
@@ -131,5 +121,26 @@ final class PayloadValidator
         }
 
         return $number;
+    }
+
+    private function validateRange(string $field, float $value, float $minimum, float $maximum): void
+    {
+        if ($value < $minimum || $value > $maximum) {
+            throw new ValidationException(sprintf('%s esta fora da faixa permitida.', $field));
+        }
+    }
+
+    /** @param array<string, mixed> $data
+     *  @param list<string> $allowedFields
+     */
+    private function rejectUnknownFields(array $data, array $allowedFields): void
+    {
+        $unknownFields = array_diff(array_keys($data), $allowedFields);
+        if ($unknownFields !== []) {
+            throw new ValidationException(sprintf(
+                'Payload contem campo nao reconhecido: %s.',
+                implode(', ', $unknownFields)
+            ));
+        }
     }
 }
