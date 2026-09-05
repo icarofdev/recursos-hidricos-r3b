@@ -1,0 +1,15 @@
+[Unit]
+Description=R3B SM-WA MQTT subscriber
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/var/www/recursos-hidricos-r3b
+ExecStart=/usr/bin/php /var/www/recursos-hidricos-r3b/mqtt/subscriber.php
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

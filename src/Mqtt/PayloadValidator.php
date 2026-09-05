@@ -23,14 +23,27 @@ final class PayloadValidator
     public function validateData(string $topic, string $payload, string $topicFilter): array
     {
         $data = $this->decodeObject($payload);
-        $this->rejectUnknownFields($data, ['id', 'ppl', 'vazao', 'consumo', 'rssi_wifi']);
         $topicDeviceId = TopicMatcher::deviceId($topic, $topicFilter);
         if ($topicDeviceId === null) {
             throw new ValidationException('Topico de dados nao corresponde ao filtro configurado.');
         }
 
+        return $this->validateReading($data, $topicDeviceId);
+    }
+
+    /** Valida o mesmo contrato de telemetria quando a origem e HTTP. */
+    /** @return array{id:int,ppl:float,vazao:float,consumo:float,rssi_wifi:float} */
+    public function validateHttpData(string $payload): array
+    {
+        return $this->validateReading($this->decodeObject($payload));
+    }
+
+    /** @param array<string, mixed> $data */
+    private function validateReading(array $data, ?string $topicDeviceId = null): array
+    {
+        $this->rejectUnknownFields($data, ['id', 'ppl', 'vazao', 'consumo', 'rssi_wifi']);
         $deviceId = $this->validateDeviceId($data['id'] ?? null);
-        if (!hash_equals($topicDeviceId, (string) $deviceId)) {
+        if ($topicDeviceId !== null && !hash_equals($topicDeviceId, (string) $deviceId)) {
             throw new ValidationException('id nao corresponde ao identificador do topico.');
         }
 

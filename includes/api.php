@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use R3B\DeviceRepository;
 use R3B\Http\HttpException;
+use R3B\Mqtt\ValidationException;
 
 function api_json(array $payload, int $statusCode = 200): never
 {
@@ -33,6 +34,8 @@ function api_run(callable $callback): never
         throw new LogicException('O endpoint nao produziu uma resposta.');
     } catch (HttpException $exception) {
         api_error($exception->statusCode, $exception->errorCode, $exception->getMessage());
+    } catch (ValidationException $exception) {
+        api_error(422, 'INVALID_TELEMETRY', $exception->getMessage());
     } catch (PDOException $exception) {
         error_log(sprintf('[API] Database error: %s', $exception->getMessage()));
         api_error(503, 'DATABASE_UNAVAILABLE', 'Banco de dados temporariamente indisponivel.');
@@ -49,6 +52,40 @@ function api_require_get(): void
     if ($method !== 'GET') {
         header('Allow: GET');
         throw new HttpException(405, 'METHOD_NOT_ALLOWED', 'Este endpoint aceita somente GET.');
+    }
+}
+
+function api_require_post(): void
+{
+    $method = strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+    if ($method !== 'POST') {
+        header('Allow: POST');
+        throw new HttpException(405, 'METHOD_NOT_ALLOWED', 'Este endpoint aceita somente POST.');
+    }
+}
+
+function api_require_device_token(): void
+{
+    $expected = trim(env_value('SMWA_DEVICE_TOKEN', '') ?? '');
+    if ($expected === '') {
+        throw new HttpException(
+            503,
+            'INGEST_NOT_CONFIGURED',
+            'O endpoint de ingestao ainda nao foi configurado.'
+        );
+    }
+
+    $authorization = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+    $provided = null;
+    if (is_string($authorization) && preg_match('/^Bearer\s+(.+)$/i', trim($authorization), $matches)) {
+        $provided = trim($matches[1]);
+    }
+    if ($provided === null && isset($_SERVER['HTTP_X_DEVICE_TOKEN'])) {
+        $provided = trim((string) $_SERVER['HTTP_X_DEVICE_TOKEN']);
+    }
+
+    if ($provided === null || $provided === '' || !hash_equals($expected, $provided)) {
+        throw new HttpException(401, 'INVALID_DEVICE_TOKEN', 'Token de dispositivo invalido.');
     }
 }
 
@@ -104,4 +141,3 @@ function api_repository(): DeviceRepository
 
     return $repository;
 }
-

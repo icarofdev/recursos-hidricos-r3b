@@ -2,28 +2,16 @@
 
 declare(strict_types=1);
 
+require_once __DIR__ . '/telemetry.php';
+
 function mqtt_config(): array
 {
-    $host = trim(env_value('MQTT_HOST') ?? '');
+    $host = trim(env_value('MQTT_HOST', 'r10116ac.ala.us-east-1.emqxsl.com') ?? '');
     if ($host === null || $host === '') {
         throw new RuntimeException('MQTT_HOST nao foi configurado.');
     }
 
-    $allowedDevices = array_values(array_unique(array_filter(
-        array_map(
-            static fn (string $deviceId): string => trim($deviceId),
-            explode(',', env_value('MQTT_ALLOWED_DEVICE_IDS', '') ?? '')
-        ),
-        static fn (string $deviceId): bool => $deviceId !== ''
-    )));
-    foreach ($allowedDevices as $deviceId) {
-        if (
-            !preg_match('/^[1-9][0-9]*$/', $deviceId)
-            || filter_var($deviceId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false
-        ) {
-            throw new RuntimeException('MQTT_ALLOWED_DEVICE_IDS contem um identificador invalido.');
-        }
-    }
+    $allowedDevices = telemetry_allowed_device_ids();
 
     $clientId = trim(env_value('MQTT_CLIENT_ID', 'sm-wa-php-subscriber') ?: 'sm-wa-php-subscriber');
     if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9_-]{0,22}$/', $clientId)) {
@@ -60,8 +48,8 @@ function mqtt_config(): array
 
     return [
         'host' => $host,
-        'port' => env_int('MQTT_PORT', 1883, 1, 65535),
-        'username' => env_value('MQTT_USERNAME'),
+        'port' => env_int('MQTT_PORT', 8883, 1, 65535),
+        'username' => env_value('MQTT_USERNAME', 'smwa_device'),
         'password' => env_value('MQTT_PASSWORD'),
         'client_id' => $clientId,
         'data_topic' => $dataTopic,
@@ -70,12 +58,12 @@ function mqtt_config(): array
         'keep_alive' => env_int('MQTT_KEEP_ALIVE_SECONDS', 30, 5, 65535),
         'connect_timeout' => env_int('MQTT_CONNECT_TIMEOUT_SECONDS', 10, 1, 300),
         'socket_timeout' => env_int('MQTT_SOCKET_TIMEOUT_SECONDS', 5, 1, 300),
-        'max_payload_bytes' => env_int('MQTT_MAX_PAYLOAD_BYTES', 4096, 128, 1048576),
+        'max_payload_bytes' => telemetry_max_payload_bytes(),
         'reconnect_min' => $reconnectMinimum,
         'reconnect_max' => $reconnectMaximum,
         'reconnect_reset_after' => env_int('MQTT_RECONNECT_RESET_AFTER_SECONDS', 60, 5, 3600),
         'allowed_devices' => $allowedDevices,
-        'tls' => env_bool('MQTT_TLS', false),
+        'tls' => env_bool('MQTT_TLS', true),
         'tls_verify_peer' => env_bool('MQTT_TLS_VERIFY_PEER', true),
         'tls_ca_file' => env_value('MQTT_TLS_CA_FILE'),
     ];

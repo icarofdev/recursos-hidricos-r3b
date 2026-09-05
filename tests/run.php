@@ -326,6 +326,21 @@ test('Fluxo MQTT persiste leitura atual, historico e status', static function ()
     expectSame('offline', $repository->status(1, $secondAt->modify('+6 seconds'))['status']);
 });
 
+test('Fluxo HTTPS usa o mesmo contrato e persiste leitura atual', static function (): void {
+    [, $repository, $processor] = testContext();
+    $receivedAt = new DateTimeImmutable('2026-08-20 12:00:00', new DateTimeZone('UTC'));
+
+    expectSame(
+        ['kind' => 'data', 'id' => 1],
+        $processor->processHttpData(encodeJson(validReading()), $receivedAt)
+    );
+
+    $current = $repository->current(1, $receivedAt->modify('+1 second'));
+    expectTrue($current !== null, 'A leitura HTTPS deveria existir.');
+    expectSame('online', $current['device']['status']);
+    expectNear(1253.0, $current['data']['consumo']);
+});
+
 test('Timeout de comunicacao altera status calculado para offline', static function (): void {
     [, $repository, $processor] = testContext();
     $receivedAt = new DateTimeImmutable('2026-08-20 12:00:00', new DateTimeZone('UTC'));

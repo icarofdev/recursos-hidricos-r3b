@@ -70,4 +70,15 @@ final class MessageProcessor
 
         throw new ValidationException('Mensagem recebida em topico nao reconhecido.');
     }
+
+    /** Processa HTTP usando exatamente as mesmas regras e persistencia da rota MQTT. */
+    /** @return array{kind:string,id:int} */
+    public function processHttpData(string $payload, ?DateTimeImmutable $receivedAt = null): array
+    {
+        $receivedAt = ($receivedAt ?? new DateTimeImmutable('now', $this->utc))->setTimezone($this->utc);
+        $reading = $this->validator->validateHttpData($payload);
+        $this->repository->storeReading($reading, $receivedAt);
+
+        return ['kind' => 'data', 'id' => $reading['id']];
+    }
 }

@@ -23,6 +23,7 @@ $apiRoutes = [
     'api/device/history.php',
     'api/device/status.php',
     'api/device/alerts.php',
+    'api/device/ingest.php',
 ];
 if (in_array($relativePath, $apiRoutes, true)) {
     require __DIR__ . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
