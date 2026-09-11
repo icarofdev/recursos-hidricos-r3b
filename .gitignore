@@ -14,5 +14,7 @@
 *.db-wal
 
 deploy/vps.env
+deploy/vps.env*
 deploy/*.env
+*.tar
 *.tar.gz
