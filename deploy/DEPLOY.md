@@ -78,11 +78,11 @@ ufw --force enable
 ## 4. Banco de Dados MariaDB
 
 ```bash
-# Inicialize o banco seguro
-mysql_secure_installation
+# Inicialize o banco seguro (opcional no MariaDB moderno)
+sudo mysql_secure_installation
 
-# Crie a base e o usuário restrito ao localhost
-mysql -u root <<EOF
+# Crie a base e o usuário restrito ao localhost (usando sudo mysql via socket local)
+sudo mysql <<EOF
 CREATE DATABASE IF NOT EXISTS recursos_hidricos CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS 'recursos_user'@'127.0.0.1' IDENTIFIED BY 'SUA_SENHA_FORTE_DO_BANCO';
 GRANT ALL PRIVILEGES ON recursos_hidricos.* TO 'recursos_user'@'127.0.0.1';
