@@ -2,7 +2,7 @@
 # ==============================================================================
 # Script de Deploy e Sincronização com VPS — Recursos Hídricos R3B
 # Sincroniza o projeto para o servidor remoto sem hardcode de credenciais.
-# Suporta Rollback e Dry-Run.
+# Usuário padrão: deploy (não-root). Suporta Snapshots Timestamped, Rollback e Dry-Run.
 # ==============================================================================
 
 set -euo pipefail
@@ -32,10 +32,12 @@ load_env_safe "${CONFIG_FILE}"
 
 # Variáveis com fallback para variáveis de ambiente ou padrões
 VPS_HOST="${VPS_HOST:-}"
-VPS_USER="${VPS_USER:-root}"
+VPS_USER="${VPS_USER:-deploy}"
 VPS_PORT="${VPS_PORT:-22}"
 VPS_SSH_KEY="${VPS_SSH_KEY:-}"
 VPS_REMOTE_DIR="${VPS_REMOTE_DIR:-/var/www/recursos-hidricos-r3b}"
+VPS_SNAPSHOT_DIR="${VPS_SNAPSHOT_DIR:-/var/www/recursos-hidricos-snapshots}"
+VPS_KEEP_SNAPSHOTS="${VPS_KEEP_SNAPSHOTS:-3}"
 WEB_USER="${WEB_USER:-www-data}"
 WEB_GROUP="${WEB_GROUP:-www-data}"
 REMOTE_RELOAD_SERVICES="${REMOTE_RELOAD_SERVICES:-true}"
@@ -52,10 +54,10 @@ Opções (sobrescrevem deploy/vps.env):
   -h <host>        Host ou IP da VPS (obrigatório se não definido em deploy/vps.env)
   -u <user>        Usuário SSH (padrão: ${VPS_USER})
   -p <port>        Porta SSH (padrão: ${VPS_PORT})
-  -k <key_file>    Caminho para chave privada SSH
+  -k <key_file>    Caminho para chave privada SSH (recomendado)
   -d <remote_dir>  Diretório remoto (padrão: ${VPS_REMOTE_DIR})
   --dry-run        Simula o deploy sem transferir nem alterar arquivos remotos
-  --rollback       Restaura a versão anterior salva em ${VPS_REMOTE_DIR}.bak na VPS
+  --rollback       Restaura o snapshot anterior de código sem alterar o banco
   --delete         Ativa remoção de arquivos no destino que não existem localmente
   --help           Exibe esta ajuda
 
@@ -78,7 +80,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Verificação de dependências essenciais
+# Verificação de dependências essenciais locais
 for cmd in ssh scp tar; do
     if ! command -v "${cmd}" >/dev/null 2>&1; then
         echo "ERRO: Ferramenta essencial '${cmd}' não encontrada no ambiente." >&2
@@ -107,26 +109,54 @@ if [[ -n "${VPS_SSH_KEY}" ]]; then
         echo "ERRO: Arquivo de chave SSH não encontrado em '${VPS_SSH_KEY}'" >&2
         exit 1
     fi
-    SSH_OPTS+=(-i "${VPS_SSH_KEY}")
+    SSH_OPTS+=(-i "${VPS_SSH_KEY}" -o BatchMode=yes)
 fi
 
-# MODO ROLLBACK: Restaura versão anterior
+# MODO ROLLBACK: Restaura o snapshot mais recente de código sem tocar no banco
 if [[ "${ROLLBACK}" == "true" ]]; then
     echo "===================================================================="
-    echo " MODO ROLLBACK: Restaurando backup anterior na VPS"
+    echo " MODO ROLLBACK: Restaurando snapshot anterior de código na VPS"
     echo " Destino: ${VPS_USER}@${VPS_HOST}:${VPS_PORT} -> ${VPS_REMOTE_DIR}"
     echo "===================================================================="
 
     ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" bash -s <<ROLLBACK_CMD
-        set -e
-        if [ ! -d '${VPS_REMOTE_DIR}.bak' ]; then
-            echo 'ERRO: Nenhum snapshot de rollback encontrado em ${VPS_REMOTE_DIR}.bak' >&2
+        set -euo pipefail
+        SUDO_CMD=""
+        if [ "\$(id -u)" -ne 0 ]; then SUDO_CMD="sudo"; fi
+
+        if [ ! -d '${VPS_SNAPSHOT_DIR}' ]; then
+            echo 'ERRO: Diretório de snapshots não existe em ${VPS_SNAPSHOT_DIR}' >&2
             exit 1
         fi
-        echo 'Restaurando arquivos de ${VPS_REMOTE_DIR}.bak para ${VPS_REMOTE_DIR}...'
-        cp -a '${VPS_REMOTE_DIR}.bak/.' '${VPS_REMOTE_DIR}/'
-        chown -R ${WEB_USER}:${WEB_GROUP} '${VPS_REMOTE_DIR}'
-        echo 'Rollback concluído com sucesso.'
+
+        LATEST_SNAPSHOT=\$(ls -1dt '${VPS_SNAPSHOT_DIR}'/snapshot_* 2>/dev/null | head -n1 || echo "")
+        if [ -z "\${LATEST_SNAPSHOT}" ] || [ ! -d "\${LATEST_SNAPSHOT}" ]; then
+            echo 'ERRO: Nenhum snapshot timestamped encontrado em ${VPS_SNAPSHOT_DIR}' >&2
+            exit 1
+        fi
+
+        echo "Restaurando código a partir do snapshot: \${LATEST_SNAPSHOT}..."
+        # Copia mantendo arquivos de produção que não façam parte do snapshot (.env, backups)
+        cp -a "\${LATEST_SNAPSHOT}/." '${VPS_REMOTE_DIR}/'
+
+        \${SUDO_CMD} chown -R ${WEB_USER}:${WEB_GROUP} '${VPS_REMOTE_DIR}'
+        find '${VPS_REMOTE_DIR}' -type d -exec chmod 755 {} +
+        find '${VPS_REMOTE_DIR}' -type f -exec chmod 644 {} +
+        if [ -f '${VPS_REMOTE_DIR}/.env' ]; then
+            chmod 600 '${VPS_REMOTE_DIR}/.env'
+        fi
+        chmod +x '${VPS_REMOTE_DIR}'/scripts/*.sh 2>/dev/null || true
+
+        # Teste de sintaxe e reload
+        \${SUDO_CMD} nginx -t
+        ACTIVE_PHP=\$(systemctl list-units --type=service --state=running 2>/dev/null | grep -oE 'php[0-9.]*-fpm' | head -n1 || echo "${REMOTE_PHP_FPM_SERVICE}")
+        if [ -n "\${ACTIVE_PHP}" ]; then
+            \${SUDO_CMD} systemctl reload "\${ACTIVE_PHP}" || \${SUDO_CMD} systemctl restart "\${ACTIVE_PHP}"
+        fi
+        \${SUDO_CMD} systemctl reload nginx
+
+        echo "[ROLLBACK CONCLUÍDO] Versão restaurada para \${LATEST_SNAPSHOT}."
+        echo "INFO: O banco de dados NÃO foi alterado (dados de telemetria preservados)."
 ROLLBACK_CMD
     echo "Rollback finalizado com sucesso."
     exit 0
@@ -147,32 +177,36 @@ TAR_EXCLUDES=(
     --exclude=scratch
 )
 
+# Metadados de versão / commit local
+CURRENT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "sem-git")
+COMMIT_MSG=$(git log -1 --pretty=%B 2>/dev/null | head -n 1 | tr -d '"' || echo "Deploy manual")
+DEPLOY_TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
 # MODO DRY-RUN: Simulação sem alterar nada
 if [[ "${DRY_RUN}" == "true" ]]; then
     echo "===================================================================="
     echo " MODO DRY-RUN (SIMULAÇÃO): Nenhum arquivo remoto será modificado"
     echo " Destino: ${VPS_USER}@${VPS_HOST}:${VPS_PORT} -> ${VPS_REMOTE_DIR}"
+    echo " Versão a enviar: Commit ${CURRENT_COMMIT} (${COMMIT_MSG})"
     echo "===================================================================="
 
     echo ""
-    echo "Arquivos protegidos que NÃO seriam enviados:"
-    echo " - .env, .env.* (credenciais remotas preservadas)"
-    echo " - .git/ (histórico Git não trafegado)"
-    echo " - logs/, *.log, *.db* (dados locais ignorados)"
-    echo " - deploy/vps.env* (credenciais de conexão protegidas)"
+    echo "Arquivos protegidos que NUNCA são transferidos:"
+    echo " - .env, .env.* (credenciais de produção locais e remotas)"
+    echo " - .git/ (histórico Git do repositório)"
+    echo " - logs/, *.log, *.db* (arquivos temporários e logs locais)"
+    echo " - deploy/vps.env* (credenciais de conexão SSH)"
 
     echo ""
-    echo "Arquivos do projeto elegíveis para transferência:"
-    tar "${TAR_EXCLUDES[@]}" -cf - -C "${APP_DIR}" . | tar -tf - | head -n 25
-    echo "  ... (total filtrado com sucesso)"
-
-    echo ""
-    echo "Comandos que seriam executados remotamente na VPS:"
-    echo " 1. Criar snapshot em ${VPS_REMOTE_DIR}.bak"
-    echo " 2. Extrair pacote protegendo .env existente (--exclude='.env')"
-    echo " 3. Ajustar permissões (pastas 755, arquivos 644, .env 600, scripts +x)"
-    echo " 4. Testar sintaxe do Nginx (nginx -t) e recarregar PHP-FPM / Nginx"
-    echo " 5. Testar healthcheck em http://127.0.0.1/health.php"
+    echo "Validações que serão executadas na VPS:"
+    echo " 1. Checagem de espaço em disco (mínimo 150MB livres)"
+    echo " 2. Criação de snapshot timestamped em ${VPS_SNAPSHOT_DIR}/snapshot_YYYYMMDD_HHMMSS"
+    echo " 3. Rotação mantendo os últimos ${VPS_KEEP_SNAPSHOTS} snapshots"
+    echo " 4. Extração protegendo .env existente (--exclude='.env')"
+    echo " 5. Permissões de menor privilégio (pastas 755, arquivos 644, .env 600, scripts +x)"
+    echo " 6. Teste de sintaxe Nginx (nginx -t) com FAIL-FAST"
+    echo " 7. Reload dos serviços com sudo mínimo"
+    echo " 8. Healthcheck local em http://127.0.0.1/health.php"
     echo ""
     echo "Simulação concluída com sucesso."
     exit 0
@@ -181,116 +215,132 @@ fi
 echo "===================================================================="
 echo " Início do Deploy: Recursos Hídricos R3B"
 echo " Destino: ${VPS_USER}@${VPS_HOST}:${VPS_PORT} -> ${VPS_REMOTE_DIR}"
+echo " Versão: Commit ${CURRENT_COMMIT} em ${DEPLOY_TIMESTAMP}"
 echo "===================================================================="
 
-# 1. Garantir que o diretório remoto exista
-echo "[1/5] Verificando diretório remoto..."
-ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" "mkdir -p '${VPS_REMOTE_DIR}'"
+# 1. Validar espaço em disco e preparar estrutura remota
+echo "[1/6] Verificando espaço em disco e diretórios na VPS..."
+ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" bash -s <<PRE_CHECK
+    set -euo pipefail
+    SUDO_CMD=""
+    if [ "\$(id -u)" -ne 0 ]; then SUDO_CMD="sudo"; fi
 
-# 2. Sincronizar arquivos (Rsync ou Tar/SCP)
-echo "[2/5] Sincronizando arquivos..."
-if command -v rsync >/dev/null 2>&1; then
-    RSYNC_SSH="ssh -p ${VPS_PORT} -o StrictHostKeyChecking=accept-new"
-    if [[ -n "${VPS_SSH_KEY}" ]]; then
-        RSYNC_SSH="${RSYNC_SSH} -i ${VPS_SSH_KEY}"
+    \${SUDO_CMD} mkdir -p '${VPS_REMOTE_DIR}' '${VPS_SNAPSHOT_DIR}'
+    \${SUDO_CMD} chown -R ${VPS_USER}:${WEB_GROUP} '${VPS_REMOTE_DIR}' '${VPS_SNAPSHOT_DIR}'
+
+    # Checagem de espaço em disco na partição de destino (mínimo 150MB)
+    AVAILABLE_MB=\$(df -m '${VPS_REMOTE_DIR%/*}' | awk 'NR==2 {print \$4}')
+    if [ "\${AVAILABLE_MB}" -lt 150 ]; then
+        echo "ERRO: Espaço insuficiente na VPS (\${AVAILABLE_MB}MB livres). Mínimo exigido: 150MB." >&2
+        exit 1
     fi
+    echo "Espaço em disco validado: \${AVAILABLE_MB}MB livres."
+PRE_CHECK
 
-    RSYNC_DELETE_FLAGS=()
-    if [[ "${ENABLE_DELETE}" == "true" ]]; then
-        RSYNC_DELETE_FLAGS=(--delete)
-    fi
+# 2. Gerar snapshot timestamped da versão anterior (mantém últimos N)
+echo "[2/6] Gerando snapshot da versão atual..."
+ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" bash -s <<CREATE_SNAPSHOT
+    set -euo pipefail
+    if [ -d '${VPS_REMOTE_DIR}/src' ]; then
+        SNAPSHOT_NAME="snapshot_\$(date +'%Y%m%d_%H%M%S')"
+        TARGET_SNAP='${VPS_SNAPSHOT_DIR}'/"\${SNAPSHOT_NAME}"
+        echo "Criando snapshot em \${TARGET_SNAP}..."
+        cp -a '${VPS_REMOTE_DIR}' "\${TARGET_SNAP}"
+        rm -f "\${TARGET_SNAP}/.env" "\${TARGET_SNAP}/.env.*"
 
-    # Snapshot prévio antes de rsync
-    ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" bash -s <<PRE_RSYNC
-        if [ -d '${VPS_REMOTE_DIR}/src' ]; then
-            rm -rf '${VPS_REMOTE_DIR}.bak'
-            cp -a '${VPS_REMOTE_DIR}' '${VPS_REMOTE_DIR}.bak'
+        # Rotação: manter os últimos ${VPS_KEEP_SNAPSHOTS} snapshots
+        cd '${VPS_SNAPSHOT_DIR}'
+        TOTAL_SNAPS=\$(ls -1dt snapshot_* 2>/dev/null | wc -l)
+        if [ "\${TOTAL_SNAPS}" -gt "${VPS_KEEP_SNAPSHOTS}" ]; then
+            ls -1dt snapshot_* | tail -n +"\$(( ${VPS_KEEP_SNAPSHOTS} + 1 ))" | xargs rm -rf 2>/dev/null || true
         fi
-PRE_RSYNC
-
-    rsync -avz "${RSYNC_DELETE_FLAGS[@]}" \
-        -e "${RSYNC_SSH}" \
-        --filter="P .env" \
-        --filter="P .env.*" \
-        --filter="P /database/backups" \
-        --filter="P /logs" \
-        --exclude=".git" \
-        --exclude=".env" \
-        --exclude=".env.*" \
-        --exclude=".runtime" \
-        --exclude="*.log" \
-        --exclude="logs" \
-        --exclude="*.db*" \
-        --exclude="deploy/vps.env*" \
-        --exclude="deploy/*.env" \
-        --exclude="*.tar.gz" \
-        --exclude="scratch" \
-        "${APP_DIR}/" \
-        "${VPS_USER}@${VPS_HOST}:${VPS_REMOTE_DIR}/"
-else
-    RAND_ID=$(head -c 8 /dev/urandom 2>/dev/null | xxd -p 2>/dev/null || echo "$$")
-    TEMP_ARCHIVE="${APP_DIR}/deploy-package-${RAND_ID}.tar.gz"
-    REMOTE_ARCHIVE="/tmp/r3b-deploy-${RAND_ID}.tar.gz"
-
-    trap 'rm -f "${TEMP_ARCHIVE}"' EXIT INT TERM
-
-    echo "Rsync não disponível; utilizando pacote tar + scp..."
-    tar "${TAR_EXCLUDES[@]}" -czf "${TEMP_ARCHIVE}" -C "${APP_DIR}" .
-
-    SCP_OPTS=(-P "${VPS_PORT}" -o StrictHostKeyChecking=accept-new)
-    if [[ -n "${VPS_SSH_KEY}" ]]; then
-        SCP_OPTS+=(-i "${VPS_SSH_KEY}")
     fi
+CREATE_SNAPSHOT
 
-    scp "${SCP_OPTS[@]}" "${TEMP_ARCHIVE}" "${VPS_USER}@${VPS_HOST}:${REMOTE_ARCHIVE}"
-    rm -f "${TEMP_ARCHIVE}"
+# 3. Gerar arquivo version.json e empacotar arquivos localmente
+echo "[3/6] Empacotando arquivos do projeto (Commit ${CURRENT_COMMIT})..."
+RAND_ID=$(head -c 8 /dev/urandom 2>/dev/null | xxd -p 2>/dev/null || echo "$$")
+TEMP_ARCHIVE="${APP_DIR}/deploy-package-${RAND_ID}.tar.gz"
+REMOTE_ARCHIVE="/tmp/r3b-deploy-${RAND_ID}.tar.gz"
 
-    ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" bash -s <<REMOTE_UNTAR
-        set -e
-        # Snapshot de rollback antes de atualizar
-        if [ -d '${VPS_REMOTE_DIR}/src' ]; then
-            rm -rf '${VPS_REMOTE_DIR}.bak'
-            cp -a '${VPS_REMOTE_DIR}' '${VPS_REMOTE_DIR}.bak'
-        fi
+trap 'rm -f "${TEMP_ARCHIVE}" "${APP_DIR}/version.json"' EXIT INT TERM
 
-        tar -xzf '${REMOTE_ARCHIVE}' -C '${VPS_REMOTE_DIR}' --exclude='.env' --exclude='.env.*'
-        rm -f '${REMOTE_ARCHIVE}'
-REMOTE_UNTAR
+cat > "${APP_DIR}/version.json" <<VERSION_META
+{
+  "commit": "${CURRENT_COMMIT}",
+  "message": "${COMMIT_MSG}",
+  "deployed_at": "${DEPLOY_TIMESTAMP}",
+  "deployed_by": "${USER:-deploy}"
+}
+VERSION_META
+
+tar "${TAR_EXCLUDES[@]}" -czf "${TEMP_ARCHIVE}" -C "${APP_DIR}" .
+
+# 4. Transferência via SCP com Fail-Fast
+echo "[4/6] Enviando pacote para a VPS via SCP..."
+SCP_OPTS=(-P "${VPS_PORT}" -o StrictHostKeyChecking=accept-new)
+if [[ -n "${VPS_SSH_KEY}" ]]; then
+    SCP_OPTS+=(-i "${VPS_SSH_KEY}" -o BatchMode=yes)
 fi
 
-# 3. Ajustar permissões com menor privilégio na VPS
-echo "[3/5] Ajustando permissões remotas..."
-ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" bash -s <<REMOTE_POST
-    set -e
-    chown -R ${WEB_USER}:${WEB_GROUP} "${VPS_REMOTE_DIR}"
-    find "${VPS_REMOTE_DIR}" -type d -exec chmod 755 {} +
-    find "${VPS_REMOTE_DIR}" -type f -exec chmod 644 {} +
-    if [ -f "${VPS_REMOTE_DIR}/.env" ]; then
-        chmod 600 "${VPS_REMOTE_DIR}/.env"
-    fi
-    chmod +x "${VPS_REMOTE_DIR}"/scripts/*.sh 2>/dev/null || true
-REMOTE_POST
+scp "${SCP_OPTS[@]}" "${TEMP_ARCHIVE}" "${VPS_USER}@${VPS_HOST}:${REMOTE_ARCHIVE}"
+rm -f "${TEMP_ARCHIVE}" "${APP_DIR}/version.json"
 
-# 4. Recarregar serviços com teste de sintaxe
-echo "[4/5] Recarregando serviços na VPS..."
+# 5. Extração com Fail-Fast e ajuste de permissões com privilégio mínimo
+echo "[5/6] Extraindo atualização e ajustando permissões..."
+ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" bash -s <<REMOTE_UNTAR
+    set -euo pipefail
+    SUDO_CMD=""
+    if [ "\$(id -u)" -ne 0 ]; then SUDO_CMD="sudo"; fi
+
+    tar -xzf '${REMOTE_ARCHIVE}' -C '${VPS_REMOTE_DIR}' --exclude='.env' --exclude='.env.*'
+    rm -f '${REMOTE_ARCHIVE}'
+
+    \${SUDO_CMD} chown -R ${WEB_USER}:${WEB_GROUP} '${VPS_REMOTE_DIR}'
+    find '${VPS_REMOTE_DIR}' -type d -exec chmod 755 {} +
+    find '${VPS_REMOTE_DIR}' -type f -exec chmod 644 {} +
+    if [ -f '${VPS_REMOTE_DIR}/.env' ]; then
+        chmod 600 '${VPS_REMOTE_DIR}/.env'
+    fi
+    chmod +x '${VPS_REMOTE_DIR}'/scripts/*.sh 2>/dev/null || true
+
+    # Registro de auditoria no servidor
+    echo "[${DEPLOY_TIMESTAMP}] Deploy executado com sucesso. Commit: ${CURRENT_COMMIT}" >> '${VPS_REMOTE_DIR}/deploy.log'
+REMOTE_UNTAR
+
+# 6. Validação Nginx (Fail-Fast) e Reload dos Serviços via sudo mínimo
+echo "[6/6] Validando sintaxe e recarregando serviços..."
 ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" bash -s <<RELOAD_SERVICES
-    set -e
-    ACTIVE_PHP=\$(systemctl list-units --type=service --state=running | grep -oE 'php[0-9.]*-fpm' | head -n1 || echo "${REMOTE_PHP_FPM_SERVICE}")
+    set -euo pipefail
+    SUDO_CMD=""
+    if [ "\$(id -u)" -ne 0 ]; then SUDO_CMD="sudo"; fi
+
+    # FAIL-FAST: Testa sintaxe Nginx antes de aplicar
+    if command -v nginx >/dev/null 2>&1; then
+        echo "Validando sintaxe do Nginx (nginx -t)..."
+        \${SUDO_CMD} nginx -t
+    fi
+
+    ACTIVE_PHP=\$(systemctl list-units --type=service --state=running 2>/dev/null | grep -oE 'php[0-9.]*-fpm' | head -n1 || echo "${REMOTE_PHP_FPM_SERVICE}")
     if [ -n "\${ACTIVE_PHP}" ]; then
-        systemctl reload "\${ACTIVE_PHP}" 2>/dev/null || systemctl restart "\${ACTIVE_PHP}" 2>/dev/null || true
+        echo "Recarregando \${ACTIVE_PHP}..."
+        \${SUDO_CMD} systemctl reload "\${ACTIVE_PHP}" || \${SUDO_CMD} systemctl restart "\${ACTIVE_PHP}"
+    fi
+
+    # Garante compatibilidade de socket se /run/php/php-fpm.sock genérico for usado
+    if [ ! -e /run/php/php-fpm.sock ] && ls -1 /run/php/php*-fpm.sock >/dev/null 2>&1; then
+        DETECTED_SOCK=\$(ls -1 /run/php/php*-fpm.sock | head -n1)
+        \${SUDO_CMD} ln -sf "\${DETECTED_SOCK}" /run/php/php-fpm.sock 2>/dev/null || true
     fi
 
     if command -v nginx >/dev/null 2>&1; then
-        if nginx -t >/dev/null 2>&1; then
-            systemctl reload nginx 2>/dev/null || true
-        else
-            echo "AVISO: Falha na sintaxe do Nginx (nginx -t); reload ignorado." >&2
-        fi
+        echo "Recarregando Nginx..."
+        \${SUDO_CMD} systemctl reload nginx
     fi
 RELOAD_SERVICES
 
-# 5. Validar integridade via Healthcheck
-echo "[5/5] Validando integridade via Healthcheck..."
+# Validação Healthcheck local
+echo "Validando aplicação via Healthcheck..."
 HEALTH_CHECK=$(ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/health.php 2>/dev/null || true")
 
 if [[ "${HEALTH_CHECK}" == "200" ]]; then
@@ -301,4 +351,4 @@ else
     echo "INFO: Deploy finalizado. (Código HTTP local retornado pelo healthcheck: ${HEALTH_CHECK:-indisponível})"
 fi
 
-echo "Deploy finalizado com sucesso em $(date '+%Y-%m-%d %H:%M:%S')."
+echo "Deploy do commit ${CURRENT_COMMIT} finalizado com sucesso em $(date '+%Y-%m-%d %H:%M:%S')."

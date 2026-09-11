@@ -29,7 +29,36 @@ apt install -y nginx mariadb-server php-fpm php-mysql php-curl php-mbstring php-
 
 ---
 
-## 3. Configuração do Firewall (UFW)
+## 3. Usuário Dedicado 'deploy', SSH por Chave e Sudoers Mínimo
+
+Para máxima segurança, não execute deploys diários como `root` e não utilize senhas:
+
+```bash
+# 1. Criar usuário sem privilégios 'deploy' e adicioná-lo ao grupo www-data
+adduser --gecos "" --disabled-password deploy
+usermod -aG www-data deploy
+
+# 2. Configurar sua chave pública SSH para o usuário deploy
+mkdir -p /home/deploy/.ssh
+chmod 700 /home/deploy/.ssh
+# Cole sua chave pública (ex: conteúdo do seu id_ed25519.pub):
+echo "ssh-ed25519 AAAA... seu_email@exemplo.com" > /home/deploy/.ssh/authorized_keys
+chmod 600 /home/deploy/.ssh/authorized_keys
+chown -R deploy:deploy /home/deploy/.ssh
+
+# 3. Configurar sudoers com privilégio mínimo (apenas reload e testes Nginx/PHP-FPM)
+cp deploy/sudoers/recursos-hidricos /etc/sudoers.d/recursos-hidricos-deploy
+chmod 440 /etc/sudoers.d/recursos-hidricos-deploy
+
+# 4. Desabilitar login de root com senha no SSH (/etc/ssh/sshd_config)
+sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
+systemctl restart ssh
+```
+
+---
+
+## 4. Configuração do Firewall (UFW)
 
 Feche todas as portas não utilizadas:
 

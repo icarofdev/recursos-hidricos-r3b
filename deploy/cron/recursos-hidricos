@@ -7,4 +7,4 @@
 0 3 * * * root /var/www/recursos-hidricos-r3b/scripts/backup-db.sh >> /var/log/recursos-hidricos-backup.log 2>&1
 
 # Limpeza de retenção de telemetria todo domingo às 04:00 da madrugada
-0 4 * * 0 www-data /usr/bin/php /var/www/recursos-hidricos-r3b/scripts/cleanup-retention.php >> /var/log/recursos-hidricos-retention.log 2>&1
+0 4 * * 0 root /usr/bin/php /var/www/recursos-hidricos-r3b/scripts/cleanup-retention.php >> /var/log/recursos-hidricos-retention.log 2>&1

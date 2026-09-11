@@ -1,18 +1,14 @@
-/var/log/nginx/*.log {
-    daily
+# ==============================================================================
+# Logrotate — Recursos Hídricos R3B
+# Copie para /etc/logrotate.d/recursos-hidricos
+# ==============================================================================
+
+/var/log/recursos-hidricos-*.log {
+    weekly
     missingok
-    rotate 14
+    rotate 8
     compress
     delaycompress
     notifempty
-    create 0640 www-data adm
-    sharedscripts
-    prerotate
-        if [ -d /etc/logrotate.d/httpd-prerotate ]; then \
-            run-parts /etc/logrotate.d/httpd-prerotate; \
-        fi \
-    endscript
-    postrotate
-        invoke-rc.d nginx rotate >/dev/null 2>&1 || true
-    endscript
+    create 0640 root adm
 }
