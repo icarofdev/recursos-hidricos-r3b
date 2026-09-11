@@ -360,18 +360,28 @@ fi
     $SshReloadArgs = $SshArgsBase + @("${VpsUser}@${VpsHost}", $ReloadCommands)
     & ssh.exe $SshReloadArgs
 
-    # Validação Healthcheck local
-    Write-Host "Validando integridade via Healthcheck..." -ForegroundColor Yellow
-    $CheckCmd = "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/health.php 2>/dev/null || true"
-    $HealthArgs = $SshArgsBase + @("${VpsUser}@${VpsHost}", $CheckCmd)
-    $HealthCode = (& ssh.exe $HealthArgs).Trim()
+    # Validação da aplicação e roteamento HTTP porta 80
+    Write-Host "Validando integridade da aplicação e roteamento..." -ForegroundColor Yellow
+    $DbCheck = (& ssh.exe ($SshArgsBase + @("${VpsUser}@${VpsHost}", "php '${RemoteDir}/health.php' 2>/dev/null || true"))).Trim()
+    $IngestHttpCode = (& ssh.exe ($SshArgsBase + @("${VpsUser}@${VpsHost}", "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/api/device/ingest.php 2>/dev/null || true"))).Trim()
+    $RedirectCode = (& ssh.exe ($SshArgsBase + @("${VpsUser}@${VpsHost}", "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/ 2>/dev/null || true"))).Trim()
 
-    if ($HealthCode -eq "200") {
-        Write-Host "SUCESSO: Deploy concluído e Healthcheck retornou HTTP 200 (OK)." -ForegroundColor Green
-    } elseif ($HealthCode -eq "503") {
-        Write-Host "AVISO: Código copiado, mas Healthcheck retornou 503 (banco de dados pode não estar configurado ou iniciado)." -ForegroundColor DarkYellow
+    if ($IngestHttpCode -ne "301" -and ($IngestHttpCode -in @("401", "405", "200"))) {
+        Write-Host "  [OK] Ingestão HTTP na porta 80 ativa para o SM-WU (HTTP $IngestHttpCode via FastCGI)." -ForegroundColor Green
     } else {
-        Write-Host "INFO: Deploy finalizado. (Healthcheck HTTP local: $HealthCode)" -ForegroundColor Cyan
+        Write-Host "  [AVISO] Ingestão na porta 80 retornou HTTP $IngestHttpCode (verifique se o Nginx está redirecionando)." -ForegroundColor DarkYellow
+    }
+
+    if ($RedirectCode -eq "301") {
+        Write-Host "  [OK] Redirecionamento obrigatório para HTTPS ativo na raiz (HTTP 301)." -ForegroundColor Green
+    }
+
+    if ($DbCheck -match '"status":"ok"') {
+        Write-Host "SUCESSO: Deploy concluído e Banco MariaDB conectado com sucesso." -ForegroundColor Green
+    } elseif ($DbCheck -match '"status":"degraded"') {
+        Write-Host "AVISO: Código atualizado com sucesso, mas o banco retornou 503 (verifique se o MariaDB está iniciado e com schema importado)." -ForegroundColor DarkYellow
+    } else {
+        Write-Host "INFO: Deploy finalizado." -ForegroundColor Cyan
     }
 
 } finally {

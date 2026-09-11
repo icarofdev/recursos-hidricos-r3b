@@ -153,10 +153,16 @@ rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl reload nginx
 ```
 
-2. Obtenha o certificado SSL gratuito Let's Encrypt:
+2. Obtenha o certificado SSL Let's Encrypt protegendo a regra da porta 80:
 ```bash
-certbot --nginx -d seudominio.com.br
+# NUNCA use redirecionamento automático do Certbot (isso removeria a exceção do medidor na porta 80).
+# O comando abaixo emite os certificados sem alterar nenhuma linha do Nginx:
+certbot certonly --webroot -w /var/www/html -d seudominio.com.br
+# (OU se preferir o plugin nginx: certbot --nginx --no-redirect -d seudominio.com.br)
+
+systemctl reload nginx
 ```
+*(O modo `certonly --webroot` valida através do desafio em `/.well-known/acme-challenge/` já liberado na porta 80. O Certbot salvará os certificados exatamente no caminho esperado pelo Nginx e as renovações automáticas futuras NUNCA alterarão a exceção do SM-WU).*
 
 ---
 

@@ -339,16 +339,28 @@ ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" bash -s <<RELOAD_SERVICES
     fi
 RELOAD_SERVICES
 
-# Validação Healthcheck local
-echo "Validando aplicação via Healthcheck..."
-HEALTH_CHECK=$(ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/health.php 2>/dev/null || true")
+# Validação da aplicação e roteamento HTTP porta 80
+echo "Validando integridade da aplicação e roteamento..."
+DB_CHECK=$(ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" "php '${VPS_REMOTE_DIR}/health.php' 2>/dev/null || true")
+INGEST_HTTP_CODE=$(ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/api/device/ingest.php 2>/dev/null || true")
+REDIRECT_CODE=$(ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/ 2>/dev/null || true")
 
-if [[ "${HEALTH_CHECK}" == "200" ]]; then
-    echo "SUCESSO: Deploy concluído e Healthcheck retornou HTTP 200 (OK)."
-elif [[ "${HEALTH_CHECK}" == "503" ]]; then
-    echo "AVISO: Código copiado, mas Healthcheck retornou 503 (banco de dados pode não estar configurado ou iniciado)."
+if [[ "${INGEST_HTTP_CODE}" != "301" && ("${INGEST_HTTP_CODE}" == "401" || "${INGEST_HTTP_CODE}" == "405" || "${INGEST_HTTP_CODE}" == "200") ]]; then
+    echo "  [OK] Ingestão HTTP na porta 80 ativa para o SM-WU (HTTP ${INGEST_HTTP_CODE} via FastCGI)."
 else
-    echo "INFO: Deploy finalizado. (Código HTTP local retornado pelo healthcheck: ${HEALTH_CHECK:-indisponível})"
+    echo "  [AVISO] Ingestão na porta 80 retornou HTTP ${INGEST_HTTP_CODE} (verifique se o Nginx está redirecionando)."
+fi
+
+if [[ "${REDIRECT_CODE}" == "301" ]]; then
+    echo "  [OK] Redirecionamento obrigatório para HTTPS ativo na raiz (HTTP 301)."
+fi
+
+if echo "${DB_CHECK}" | grep -q '"status":"ok"'; then
+    echo "SUCESSO: Deploy concluído e Banco MariaDB conectado com sucesso."
+elif echo "${DB_CHECK}" | grep -q '"status":"degraded"'; then
+    echo "AVISO: Código atualizado com sucesso, mas o banco retornou 503 (verifique se o MariaDB está iniciado e com schema importado)."
+else
+    echo "INFO: Deploy finalizado."
 fi
 
 echo "Deploy do commit ${CURRENT_COMMIT} finalizado com sucesso em $(date '+%Y-%m-%d %H:%M:%S')."
