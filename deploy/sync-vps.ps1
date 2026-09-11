@@ -32,7 +32,15 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+# Dependências nativas necessárias no Windows
+foreach ($cmd in @("tar.exe", "scp.exe", "ssh.exe")) {
+    if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) {
+        Write-Error "Dependência ausente: '$cmd' não foi encontrado no PATH. Instale o OpenSSH Client / tar do Windows."
+        return
+    }
+}
+
+$ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
 $ProjectDir = Split-Path -Parent $ScriptDir
 
 if ([string]::IsNullOrWhiteSpace($ConfigFile)) {
@@ -48,7 +56,9 @@ if (Test-Path $ConfigFile) {
             $parts = $line.Split("=", 2)
             $k = $parts[0].Trim()
             $v = $parts[1].Trim().Trim('"').Trim("'")
-            $Config[$k] = $v
+            if ($k -match '^[A-Z0-9_]+$') {
+                $Config[$k] = $v
+            }
         }
     }
 }
@@ -75,8 +85,17 @@ $WebGroup = if ($Config.ContainsKey("WEB_GROUP")) { $Config["WEB_GROUP"] } else 
 $PhpService = if ($Config.ContainsKey("REMOTE_PHP_FPM_SERVICE")) { $Config["REMOTE_PHP_FPM_SERVICE"] } else { "php8.2-fpm" }
 
 if ([string]::IsNullOrWhiteSpace($VpsHost) -or $VpsHost -eq "seu_ip_ou_hostname") {
-    Write-Error "O host da VPS não foi configurado. Preencha deploy/vps.env ou execute: .\deploy\sync-vps.ps1 -VpsHost <IP_DA_VPS>"
-    exit 1
+    Write-Host "ERRO: O host da VPS não foi configurado." -ForegroundColor Red
+    Write-Host "Preencha deploy/vps.env ou execute: .\deploy\sync-vps.ps1 -VpsHost <IP_DA_VPS>" -ForegroundColor Yellow
+    return
+}
+
+# Validação contra caminhos perigosos ou destrutivos
+$DangerousPaths = @("/", "/root", "/var", "/var/www", "/usr", "/etc", "/bin", "/home")
+$NormalizedRemote = $RemoteDir.TrimEnd('/')
+if ([string]::IsNullOrWhiteSpace($NormalizedRemote) -or ($DangerousPaths -contains $NormalizedRemote)) {
+    Write-Host "ERRO: Diretório remoto '$RemoteDir' é inseguro ou reservado pelo sistema." -ForegroundColor Red
+    return
 }
 
 Write-Host "====================================================================" -ForegroundColor Cyan
@@ -85,13 +104,11 @@ Write-Host " Destino: ${VpsUser}@${VpsHost}:${VpsPort} -> ${RemoteDir}" -Foregro
 Write-Host "====================================================================" -ForegroundColor Cyan
 
 # 1. Empacotar arquivos do projeto (excluindo .git, .env, temporários)
-$TempArchive = Join-Path $ProjectDir "deploy-package.tar.gz"
-if (Test-Path $TempArchive) {
-    Remove-Item $TempArchive -Force
-}
+$RandomSuffix = [System.IO.Path]::GetRandomFileName().Replace(".", "")
+$TempArchive = Join-Path $ProjectDir "deploy-package-$RandomSuffix.tar.gz"
+$RemoteArchive = "/tmp/r3b-deploy-$RandomSuffix.tar.gz"
 
 Write-Host "[1/4] Empacotando arquivos do projeto..." -ForegroundColor Yellow
-$TarExe = "tar.exe"
 $TarArgs = @(
     "--exclude=.git",
     "--exclude=.env",
@@ -107,10 +124,10 @@ $TarArgs = @(
     "."
 )
 
-& $TarExe $TarArgs
+& tar.exe $TarArgs
 if (-not (Test-Path $TempArchive)) {
-    Write-Error "Falha ao gerar arquivo compactado de deploy."
-    exit 1
+    Write-Host "ERRO: Falha ao gerar arquivo compactado de deploy." -ForegroundColor Red
+    return
 }
 
 try {
@@ -120,20 +137,26 @@ try {
     if (-not [string]::IsNullOrWhiteSpace($VpsKey) -and (Test-Path $VpsKey)) {
         $ScpArgs += @("-i", $VpsKey)
     }
-    $ScpArgs += @($TempArchive, "${VpsUser}@${VpsHost}:/tmp/r3b-deploy.tar.gz")
+    $ScpArgs += @($TempArchive, "${VpsUser}@${VpsHost}:${RemoteArchive}")
 
     & scp.exe $ScpArgs
 
-    # 3. Executar descompactação e permissões na VPS
+    # 3. Executar descompactação e permissões com menor privilégio na VPS
     Write-Host "[3/4] Atualizando arquivos e ajustando permissões remotas..." -ForegroundColor Yellow
     $RemoteCommands = @"
 set -e
+if [ -z '${RemoteDir}' ] || [ '${RemoteDir}' = '/' ] || [ '${RemoteDir}' = '/root' ] || [ '${RemoteDir}' = '/var' ] || [ '${RemoteDir}' = '/var/www' ]; then
+    echo 'ERRO: Diretório remoto inválido: ${RemoteDir}' >&2
+    exit 1
+fi
+
 mkdir -p '${RemoteDir}'
-tar -xzf /tmp/r3b-deploy.tar.gz -C '${RemoteDir}' --exclude='.env'
-rm -f /tmp/r3b-deploy.tar.gz
+tar -xzf '${RemoteArchive}' -C '${RemoteDir}' --exclude='.env'
+rm -f '${RemoteArchive}'
 
 chown -R ${WebUser}:${WebGroup} '${RemoteDir}'
-chmod -R 755 '${RemoteDir}'
+find '${RemoteDir}' -type d -exec chmod 755 {} +
+find '${RemoteDir}' -type f -exec chmod 644 {} +
 if [ -f '${RemoteDir}/.env' ]; then
     chmod 600 '${RemoteDir}/.env'
 fi
@@ -152,7 +175,7 @@ systemctl reload nginx 2>/dev/null || true
     & ssh.exe $SshArgs
 
     # 4. Validar saúde da aplicação na VPS
-    Write-Host "[4/4] Validando aplicação remota..." -ForegroundColor Yellow
+    Write-Host "[4/4] Validando aplicação remota via Healthcheck..." -ForegroundColor Yellow
     $CheckCmd = "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/health.php 2>/dev/null || true"
     $HealthArgs = @("-p", $VpsPort, "-o", "StrictHostKeyChecking=accept-new")
     if (-not [string]::IsNullOrWhiteSpace($VpsKey) -and (Test-Path $VpsKey)) {
@@ -165,7 +188,7 @@ systemctl reload nginx 2>/dev/null || true
     if ($HealthCode -eq "200") {
         Write-Host "SUCESSO: Deploy concluído e Healthcheck retornou HTTP 200 (OK)." -ForegroundColor Green
     } elseif ($HealthCode -eq "503") {
-        Write-Host "AVISO: Código copiado com sucesso, mas o banco de dados retornou 503 (verifique se o MariaDB está rodando e com o schema importado)." -ForegroundColor DarkYellow
+        Write-Host "AVISO: Código copiado com sucesso, mas o banco retornou 503 (verifique se o MariaDB está rodando e com o schema importado)." -ForegroundColor DarkYellow
     } else {
         Write-Host "INFO: Deploy finalizado. (Healthcheck HTTP local: $HealthCode)" -ForegroundColor Cyan
     }

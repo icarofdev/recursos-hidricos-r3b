@@ -10,11 +10,25 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/vps.env"
 
-# Carregar arquivo de configuração local se existir
-if [[ -f "${CONFIG_FILE}" ]]; then
-    # shellcheck disable=SC1090
-    source "${CONFIG_FILE}"
-fi
+# Leitura segura do arquivo de configuração (evita eval/source de código arbitrário)
+load_env_safe() {
+    local file="$1"
+    if [[ -f "${file}" ]]; then
+        while IFS='=' read -r key val || [[ -n "${key}" ]]; do
+            key=$(echo "${key}" | tr -d ' \t\r\n')
+            [[ -z "${key}" || "${key}" =~ ^# ]] && continue
+            val=$(echo "${val}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^["'\''\(.*\)["'\'']$/\1/' | tr -d '\r')
+            if [[ "${key}" =~ ^[A-Z0-9_]+$ ]]; then
+                # Somente define se a variável ainda não foi definida no ambiente
+                if [[ -z "${!key:-}" ]]; then
+                    export "${key}=${val}"
+                fi
+            fi
+        done < "${file}"
+    fi
+}
+
+load_env_safe "${CONFIG_FILE}"
 
 # Variáveis com fallback para variáveis de ambiente ou padrões
 VPS_HOST="${VPS_HOST:-}"
@@ -26,6 +40,7 @@ WEB_USER="${WEB_USER:-www-data}"
 WEB_GROUP="${WEB_GROUP:-www-data}"
 REMOTE_RELOAD_SERVICES="${REMOTE_RELOAD_SERVICES:-true}"
 REMOTE_PHP_FPM_SERVICE="${REMOTE_PHP_FPM_SERVICE:-php8.2-fpm}"
+ENABLE_DELETE=false
 
 usage() {
     cat <<EOF
@@ -37,6 +52,7 @@ Opções (sobrescrevem deploy/vps.env):
   -p <port>        Porta SSH (padrão: ${VPS_PORT})
   -k <key_file>    Caminho para chave privada SSH
   -d <remote_dir>  Diretório remoto (padrão: ${VPS_REMOTE_DIR})
+  --delete         Ativa remoção de arquivos no destino que não existem localmente
   --help           Exibe esta ajuda
 
 EOF
@@ -50,9 +66,18 @@ while [[ $# -gt 0 ]]; do
         -p) VPS_PORT="$2"; shift 2 ;;
         -k) VPS_SSH_KEY="$2"; shift 2 ;;
         -d) VPS_REMOTE_DIR="$2"; shift 2 ;;
+        --delete) ENABLE_DELETE=true; shift 1 ;;
         --help) usage ;;
         *) echo "Opção desconhecida: $1" >&2; usage ;;
     esac
+done
+
+# Verificação de dependências essenciais
+for cmd in ssh scp tar; do
+    if ! command -v "${cmd}" >/dev/null 2>&1; then
+        echo "ERRO: Ferramenta essencial '${cmd}' não encontrada no ambiente." >&2
+        exit 1
+    fi
 done
 
 if [[ -z "${VPS_HOST}" || "${VPS_HOST}" == "seu_ip_ou_hostname" ]]; then
@@ -61,8 +86,21 @@ if [[ -z "${VPS_HOST}" || "${VPS_HOST}" == "seu_ip_ou_hostname" ]]; then
     exit 1
 fi
 
+# Validação estrita contra caminhos perigosos ou acidentais
+NORMALIZED_REMOTE="${VPS_REMOTE_DIR%/}"
+case "${NORMALIZED_REMOTE}" in
+    ""|"/"|"/root"|"/var"|"/var/www"|"/usr"|"/etc"|"/bin"|"/home")
+        echo "ERRO: Diretório remoto '${VPS_REMOTE_DIR}' é inválido ou protegido pelo sistema." >&2
+        exit 1
+        ;;
+esac
+
 SSH_OPTS=(-p "${VPS_PORT}" -o StrictHostKeyChecking=accept-new)
 if [[ -n "${VPS_SSH_KEY}" ]]; then
+    if [[ ! -f "${VPS_SSH_KEY}" ]]; then
+        echo "ERRO: Arquivo de chave SSH não encontrado em '${VPS_SSH_KEY}'" >&2
+        exit 1
+    fi
     SSH_OPTS+=(-i "${VPS_SSH_KEY}")
 fi
 
@@ -78,15 +116,21 @@ ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" "mkdir -p '${VPS_REMOTE_DIR}'"
 # 2. Sincronizar arquivos (Rsync ou Tar/SCP)
 echo "[2/4] Sincronizando arquivos..."
 if command -v rsync >/dev/null 2>&1; then
-    RSYNC_SSH="ssh -p ${VPS_PORT}"
+    RSYNC_SSH="ssh -p ${VPS_PORT} -o StrictHostKeyChecking=accept-new"
     if [[ -n "${VPS_SSH_KEY}" ]]; then
         RSYNC_SSH="${RSYNC_SSH} -i ${VPS_SSH_KEY}"
     fi
 
-    rsync -avz --delete \
+    RSYNC_DELETE_FLAGS=()
+    if [[ "${ENABLE_DELETE}" == "true" ]]; then
+        RSYNC_DELETE_FLAGS=(--delete)
+    fi
+
+    rsync -avz "${RSYNC_DELETE_FLAGS[@]}" \
         -e "${RSYNC_SSH}" \
         --filter="P .env" \
         --filter="P /database/backups" \
+        --filter="P /logs" \
         --exclude=".git" \
         --exclude=".env" \
         --exclude=".runtime" \
@@ -99,9 +143,13 @@ if command -v rsync >/dev/null 2>&1; then
         "${APP_DIR}/" \
         "${VPS_USER}@${VPS_HOST}:${VPS_REMOTE_DIR}/"
 else
-    echo "Rsync não encontrado localmente. Utilizando empacotamento tar + scp..."
-    TEMP_ARCHIVE="${APP_DIR}/deploy-package.tar.gz"
-    
+    RAND_ID=$(head -c 8 /dev/urandom 2>/dev/null | xxd -p 2>/dev/null || echo "$$")
+    TEMP_ARCHIVE="${APP_DIR}/deploy-package-${RAND_ID}.tar.gz"
+    REMOTE_ARCHIVE="/tmp/r3b-deploy-${RAND_ID}.tar.gz"
+
+    trap 'rm -f "${TEMP_ARCHIVE}"' EXIT INT TERM
+
+    echo "Rsync não disponível; utilizando pacote tar + scp..."
     tar --exclude='.git' \
         --exclude='.env' \
         --exclude='.runtime' \
@@ -113,26 +161,28 @@ else
         --exclude='scratch' \
         -czf "${TEMP_ARCHIVE}" -C "${APP_DIR}" .
 
-    SCP_OPTS=(-P "${VPS_PORT}")
+    SCP_OPTS=(-P "${VPS_PORT}" -o StrictHostKeyChecking=accept-new)
     if [[ -n "${VPS_SSH_KEY}" ]]; then
         SCP_OPTS+=(-i "${VPS_SSH_KEY}")
     fi
 
-    scp "${SCP_OPTS[@]}" "${TEMP_ARCHIVE}" "${VPS_USER}@${VPS_HOST}:/tmp/r3b-deploy.tar.gz"
+    scp "${SCP_OPTS[@]}" "${TEMP_ARCHIVE}" "${VPS_USER}@${VPS_HOST}:${REMOTE_ARCHIVE}"
     rm -f "${TEMP_ARCHIVE}"
 
     ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" bash -s <<REMOTE_UNTAR
-        tar -xzf /tmp/r3b-deploy.tar.gz -C "${VPS_REMOTE_DIR}" --exclude='.env'
-        rm -f /tmp/r3b-deploy.tar.gz
+        set -e
+        tar -xzf '${REMOTE_ARCHIVE}' -C '${VPS_REMOTE_DIR}' --exclude='.env'
+        rm -f '${REMOTE_ARCHIVE}'
 REMOTE_UNTAR
 fi
 
-# 3. Ajustar permissões e scripts na VPS
+# 3. Ajustar permissões com menor privilégio na VPS
 echo "[3/4] Ajustando permissões remotas..."
 ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" bash -s <<REMOTE_POST
     set -e
     chown -R ${WEB_USER}:${WEB_GROUP} "${VPS_REMOTE_DIR}"
-    chmod -R 755 "${VPS_REMOTE_DIR}"
+    find "${VPS_REMOTE_DIR}" -type d -exec chmod 755 {} +
+    find "${VPS_REMOTE_DIR}" -type f -exec chmod 644 {} +
     if [ -f "${VPS_REMOTE_DIR}/.env" ]; then
         chmod 600 "${VPS_REMOTE_DIR}/.env"
     fi
@@ -146,15 +196,15 @@ ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" bash -s <<REMOTE_POST
 REMOTE_POST
 
 # 4. Validar integridade via Healthcheck
-echo "[4/4] Validando aplicação..."
+echo "[4/4] Validando aplicação via Healthcheck..."
 HEALTH_CHECK=$(ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" "curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/health.php 2>/dev/null || true")
 
 if [[ "${HEALTH_CHECK}" == "200" ]]; then
     echo "SUCESSO: Deploy concluído e Healthcheck retornou HTTP 200 (OK)."
 elif [[ "${HEALTH_CHECK}" == "503" ]]; then
-    echo "AVISO: Código copiado, mas Healthcheck retornou 503 (Banco de dados pode não estar configurado ou iniciado)."
+    echo "AVISO: Código copiado, mas Healthcheck retornou 503 (banco de dados pode não estar configurado ou iniciado)."
 else
-    echo "INFO: Deploy finalizado. (Código HTTP retornado pelo healthcheck local da VPS: ${HEALTH_CHECK:-indisponível})"
+    echo "INFO: Deploy finalizado. (Código HTTP local retornado pelo healthcheck: ${HEALTH_CHECK:-indisponível})"
 fi
 
-echo "Deploy finalizado em $(date '+%Y-%m-%d %H:%M:%S')."
+echo "Deploy finalizado com sucesso em $(date '+%Y-%m-%d %H:%M:%S')."
