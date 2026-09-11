@@ -81,14 +81,14 @@ function expectThrows(string $expectedClass, Closure $callback, string $messageF
     throw new TestFailure(sprintf('Era esperada uma excecao %s, mas nada foi lancado.', $expectedClass));
 }
 
-/** @return array{id:int,ppl:float,vazao:float,consumo:float,rssi_wifi:float} */
+/** @return array{id:int,distancia:float,nivel:float,volume:float,rssi_wifi:float} */
 function validReading(array $overrides = []): array
 {
     return array_replace([
         'id' => 1,
-        'ppl' => 1.0,
-        'vazao' => 0.0,
-        'consumo' => 1253.0,
+        'distancia' => 42.5,
+        'nivel' => 75.0,
+        'volume' => 1253.0,
         'rssi_wifi' => -60.0,
     ], $overrides);
 }
@@ -118,36 +118,36 @@ function testContext(): array
     $database = testDatabase();
     $repository = new DeviceRepository($database, 90, new DateTimeZone('America/Sao_Paulo'));
     $validator = new PayloadValidator(4096, ['1', '2']);
-    $processor = new MessageProcessor($repository, $validator, 'sm-wa/+/data', 'sm-wa/+/status');
+    $processor = new MessageProcessor($repository, $validator, 'sm-wu/+/data', 'sm-wu/+/status');
     return [$database, $repository, $processor];
 }
 
 test('TopicMatcher extrai o id do nivel curinga', static function (): void {
-    expectSame('1', TopicMatcher::deviceId('sm-wa/1/data', 'sm-wa/+/data'));
-    expectSame(null, TopicMatcher::deviceId('sm-wa/1/status', 'sm-wa/+/data'));
-    expectSame(null, TopicMatcher::deviceId('sm-wa//data', 'sm-wa/+/data'));
+    expectSame('1', TopicMatcher::deviceId('sm-wu/1/data', 'sm-wu/+/data'));
+    expectSame(null, TopicMatcher::deviceId('sm-wu/1/status', 'sm-wu/+/data'));
+    expectSame(null, TopicMatcher::deviceId('sm-wu//data', 'sm-wu/+/data'));
 });
 
 test('Payload de dados aceita exatamente os cinco campos reais', static function (): void {
     $validator = new PayloadValidator(4096, ['1']);
-    $reading = $validator->validateData('sm-wa/1/data', encodeJson(validReading()), 'sm-wa/+/data');
+    $reading = $validator->validateData('sm-wu/1/data', encodeJson(validReading()), 'sm-wu/+/data');
 
     expectSame(1, $reading['id']);
-    expectNear(1.0, $reading['ppl']);
-    expectNear(0.0, $reading['vazao']);
-    expectNear(1253.0, $reading['consumo']);
+    expectNear(42.5, $reading['distancia']);
+    expectNear(75.0, $reading['nivel']);
+    expectNear(1253.0, $reading['volume']);
     expectNear(-60.0, $reading['rssi_wifi']);
-    expectSame(['id', 'ppl', 'vazao', 'consumo', 'rssi_wifi'], array_keys($reading));
+    expectSame(['id', 'distancia', 'nivel', 'volume', 'rssi_wifi'], array_keys($reading));
 });
 
 test('Todos os campos de telemetria sao obrigatorios', static function (): void {
     $validator = new PayloadValidator(4096, ['1']);
-    foreach (['ppl', 'vazao', 'consumo', 'rssi_wifi'] as $field) {
+    foreach (['distancia', 'nivel', 'volume', 'rssi_wifi'] as $field) {
         $reading = validReading();
         unset($reading[$field]);
         expectThrows(
             ValidationException::class,
-            static fn () => $validator->validateData('sm-wa/1/data', encodeJson($reading), 'sm-wa/+/data'),
+            static fn () => $validator->validateData('sm-wu/1/data', encodeJson($reading), 'sm-wu/+/data'),
             $field
         );
     }
@@ -158,18 +158,18 @@ test('Tipos numericos em texto e id textual sao rejeitados', static function ():
     expectThrows(
         ValidationException::class,
         static fn () => $validator->validateData(
-            'sm-wa/1/data',
-            encodeJson(validReading(['ppl' => '1.0'])),
-            'sm-wa/+/data'
+            'sm-wu/1/data',
+            encodeJson(validReading(['distancia' => '42.5'])),
+            'sm-wu/+/data'
         ),
-        'ppl'
+        'distancia'
     );
     expectThrows(
         ValidationException::class,
         static fn () => $validator->validateData(
-            'sm-wa/1/data',
+            'sm-wu/1/data',
             encodeJson(validReading(['id' => '1'])),
-            'sm-wa/+/data'
+            'sm-wu/+/data'
         ),
         'inteiro positivo'
     );
@@ -179,15 +179,15 @@ test('Id deve coincidir com o topico e estar autorizado', static function (): vo
     $validator = new PayloadValidator(4096, ['1']);
     expectThrows(
         ValidationException::class,
-        static fn () => $validator->validateData('sm-wa/2/data', encodeJson(validReading()), 'sm-wa/+/data'),
+        static fn () => $validator->validateData('sm-wu/2/data', encodeJson(validReading()), 'sm-wu/+/data'),
         'nao corresponde'
     );
     expectThrows(
         ValidationException::class,
         static fn () => $validator->validateData(
-            'sm-wa/2/data',
+            'sm-wu/2/data',
             encodeJson(validReading(['id' => 2])),
-            'sm-wa/+/data'
+            'sm-wu/+/data'
         ),
         'nao esta autorizado'
     );
@@ -198,9 +198,9 @@ test('Campos desconhecidos nao entram no contrato MQTT', static function (): voi
     expectThrows(
         ValidationException::class,
         static fn () => $validator->validateData(
-            'sm-wa/1/data',
+            'sm-wu/1/data',
             encodeJson(validReading(['campo_extra' => 25.0])),
-            'sm-wa/+/data'
+            'sm-wu/+/data'
         ),
         'campo nao reconhecido'
     );
@@ -209,18 +209,19 @@ test('Campos desconhecidos nao entram no contrato MQTT', static function (): voi
 test('Faixas basicas rejeitam valores impossiveis', static function (): void {
     $validator = new PayloadValidator(4096, ['1']);
     foreach ([
-        ['ppl', -1.0],
-        ['vazao', -0.1],
-        ['consumo', -0.1],
+        ['distancia', -1.0],
+        ['nivel', -0.1],
+        ['nivel', 100.1],
+        ['volume', -0.1],
         ['rssi_wifi', -201.0],
         ['rssi_wifi', 1.0],
     ] as [$field, $value]) {
         expectThrows(
             ValidationException::class,
             static fn () => $validator->validateData(
-                'sm-wa/1/data',
+                'sm-wu/1/data',
                 encodeJson(validReading([$field => $value])),
-                'sm-wa/+/data'
+                'sm-wu/+/data'
             ),
             $field
         );
@@ -231,24 +232,24 @@ test('JSON invalido, lista, payload grande e leitura retida sao rejeitados', sta
     $validator = new PayloadValidator(128, ['1']);
     expectThrows(
         ValidationException::class,
-        static fn () => $validator->validateData('sm-wa/1/data', '{', 'sm-wa/+/data'),
+        static fn () => $validator->validateData('sm-wu/1/data', '{', 'sm-wu/+/data'),
         'JSON valido'
     );
     expectThrows(
         ValidationException::class,
-        static fn () => $validator->validateData('sm-wa/1/data', '[1,2]', 'sm-wa/+/data'),
+        static fn () => $validator->validateData('sm-wu/1/data', '[1,2]', 'sm-wu/+/data'),
         'objeto'
     );
     expectThrows(
         ValidationException::class,
-        static fn () => $validator->validateData('sm-wa/1/data', str_repeat('x', 129), 'sm-wa/+/data'),
+        static fn () => $validator->validateData('sm-wu/1/data', str_repeat('x', 129), 'sm-wu/+/data'),
         'limite'
     );
 
     [, , $processor] = testContext();
     expectThrows(
         ValidationException::class,
-        static fn () => $processor->process('sm-wa/1/data', encodeJson(validReading()), null, true),
+        static fn () => $processor->process('sm-wu/1/data', encodeJson(validReading()), null, true),
         'retidas'
     );
 });
@@ -258,17 +259,17 @@ test('Status usa id e aceita somente online ou offline', static function (): voi
     expectSame(
         ['id' => 1, 'status' => 'online'],
         $validator->validateStatus(
-            'sm-wa/1/status',
+            'sm-wu/1/status',
             encodeJson(['id' => 1, 'status' => 'online']),
-            'sm-wa/+/status'
+            'sm-wu/+/status'
         )
     );
     expectThrows(
         ValidationException::class,
         static fn () => $validator->validateStatus(
-            'sm-wa/1/status',
+            'sm-wu/1/status',
             encodeJson(['id' => 1, 'status' => 'sleeping']),
-            'sm-wa/+/status'
+            'sm-wu/+/status'
         ),
         'online ou offline'
     );
@@ -281,44 +282,44 @@ test('Fluxo MQTT persiste leitura atual, historico e status', static function ()
 
     expectSame(
         ['kind' => 'data', 'id' => 1],
-        $processor->process('sm-wa/1/data', encodeJson(validReading()), $firstAt)
+        $processor->process('sm-wu/1/data', encodeJson(validReading()), $firstAt)
     );
     expectSame(
         ['kind' => 'data', 'id' => 1],
         $processor->process(
-            'sm-wa/1/data',
+            'sm-wu/1/data',
             encodeJson(validReading([
-                'ppl' => 1.25,
-                'vazao' => 2.5,
-                'consumo' => 1255.5,
-                'rssi_wifi' => -62.0,
+                'distancia' => 40.0,
+                'nivel' => 80.0,
+                'volume' => 1255.5,
+                'rssi_wifi' => -55.0,
             ])),
             $secondAt
         )
     );
 
-    expectSame(2, (int) $database->query('SELECT COUNT(*) FROM sensor_readings')->fetchColumn());
+    expectSame(2, (int) $database->query('SELECT COUNT(*) FROM smwu_readings')->fetchColumn());
     $current = $repository->current(1, $secondAt->modify('+1 second'));
     expectTrue($current !== null, 'A leitura atual deveria existir.');
     expectSame(1, $current['device']['id']);
     expectSame('online', $current['device']['status']);
     expectSame(1, $current['data']['id']);
-    expectNear(1.25, $current['data']['ppl']);
-    expectNear(2.5, $current['data']['vazao']);
-    expectNear(1255.5, $current['data']['consumo']);
-    expectNear(-62.0, $current['data']['rssi_wifi']);
+    expectNear(40.0, $current['data']['distancia']);
+    expectNear(80.0, $current['data']['nivel']);
+    expectNear(1255.5, $current['data']['volume']);
+    expectNear(-55.0, $current['data']['rssi_wifi']);
     expectSame('2026-08-20T09:00:30-03:00', $current['data']['timestamp']);
 
     $history = $repository->history(1, $firstAt->modify('-1 second'), 10);
     expectSame(1, $history['id']);
     expectSame(2, count($history['data']));
-    expectNear(1255.5, $history['data'][0]['consumo']);
-    expectNear(1253.0, $history['data'][1]['consumo']);
+    expectNear(1255.5, $history['data'][0]['volume']);
+    expectNear(1253.0, $history['data'][1]['volume']);
 
     expectSame(
         ['kind' => 'status', 'id' => 1, 'status' => 'offline'],
         $processor->process(
-            'sm-wa/1/status',
+            'sm-wu/1/status',
             encodeJson(['id' => 1, 'status' => 'offline']),
             $secondAt->modify('+5 seconds')
         )
@@ -338,13 +339,36 @@ test('Fluxo HTTPS usa o mesmo contrato e persiste leitura atual', static functio
     $current = $repository->current(1, $receivedAt->modify('+1 second'));
     expectTrue($current !== null, 'A leitura HTTPS deveria existir.');
     expectSame('online', $current['device']['status']);
-    expectNear(1253.0, $current['data']['consumo']);
+    expectNear(1253.0, $current['data']['volume']);
+});
+
+test('Fluxo HTTPS normaliza numeros serializados como strings pelo firmware', static function (): void {
+    [, $repository, $processor] = testContext();
+    $receivedAt = new DateTimeImmutable('2026-08-20 12:00:00', new DateTimeZone('UTC'));
+
+    expectSame(
+        ['kind' => 'data', 'id' => 1],
+        $processor->processHttpData(encodeJson([
+            'id' => '1',
+            'd' => '42.5',
+            'NIVEL' => '75.0',
+            'VOLUME' => '1253.0',
+            'rssi_wifi' => '-60.0',
+        ]), $receivedAt)
+    );
+
+    $current = $repository->current(1, $receivedAt->modify('+1 second'));
+    expectTrue($current !== null, 'A leitura HTTPS normalizada deveria existir.');
+    expectNear(42.5, $current['data']['distancia']);
+    expectNear(75.0, $current['data']['nivel']);
+    expectNear(1253.0, $current['data']['volume']);
+    expectNear(-60.0, $current['data']['rssi_wifi']);
 });
 
 test('Timeout de comunicacao altera status calculado para offline', static function (): void {
     [, $repository, $processor] = testContext();
     $receivedAt = new DateTimeImmutable('2026-08-20 12:00:00', new DateTimeZone('UTC'));
-    $processor->process('sm-wa/1/data', encodeJson(validReading()), $receivedAt);
+    $processor->process('sm-wu/1/data', encodeJson(validReading()), $receivedAt);
 
     expectSame('online', $repository->status(1, $receivedAt->modify('+89 seconds'))['status']);
     expectSame('offline', $repository->status(1, $receivedAt->modify('+90 seconds'))['status']);
@@ -357,7 +381,7 @@ test('Status retido nao cria dispositivo fantasma nem altera last_seen', static 
     expectSame(
         ['kind' => 'status', 'id' => 1, 'status' => 'offline', 'retained' => true, 'stored' => false],
         $processor->process(
-            'sm-wa/1/status',
+            'sm-wu/1/status',
             encodeJson(['id' => 1, 'status' => 'offline']),
             $receivedAt,
             true
@@ -365,10 +389,10 @@ test('Status retido nao cria dispositivo fantasma nem altera last_seen', static 
     );
     expectSame(0, (int) $database->query('SELECT COUNT(*) FROM devices')->fetchColumn());
 
-    $processor->process('sm-wa/1/data', encodeJson(validReading()), $receivedAt);
+    $processor->process('sm-wu/1/data', encodeJson(validReading()), $receivedAt);
     $lastSeenBefore = $database->query('SELECT last_seen FROM devices WHERE id = 1')->fetchColumn();
     $result = $processor->process(
-        'sm-wa/1/status',
+        'sm-wu/1/status',
         encodeJson(['id' => 1, 'status' => 'offline']),
         $receivedAt->modify('+1 hour'),
         true
@@ -381,10 +405,10 @@ test('Status retido nao cria dispositivo fantasma nem altera last_seen', static 
 test('Consultas sem id escolhem o dispositivo visto mais recentemente', static function (): void {
     [, $repository, $processor] = testContext();
     $base = new DateTimeImmutable('2026-08-20 12:00:00', new DateTimeZone('UTC'));
-    $processor->process('sm-wa/1/data', encodeJson(validReading()), $base);
+    $processor->process('sm-wu/1/data', encodeJson(validReading()), $base);
     $processor->process(
-        'sm-wa/2/data',
-        encodeJson(validReading(['id' => 2, 'consumo' => 2000.0])),
+        'sm-wu/2/data',
+        encodeJson(validReading(['id' => 2, 'volume' => 2000.0])),
         $base->modify('+1 minute')
     );
 

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Painel de monitoramento hídrico em tempo real do dispositivo SM-WA da R3B.">
+    <meta name="description" content="Painel de nível, distância e volume em tempo real do dispositivo SM-WU da R3B.">
     <title>Hidra R3B — Monitoramento hídrico</title>
     <link rel="stylesheet" href="static/css/dashboard.css">
     <script defer src="static/js/vendor/chart.umd.min.js"></script>
@@ -58,7 +58,7 @@
             <span class="sidebar-footer-dot" aria-hidden="true"></span>
             <span>
                 <strong>Coleta automática</strong>
-                <small>Fonte: dispositivo SM-WA</small>
+                <small>Fonte: dispositivo SM-WU</small>
             </span>
         </div>
     </aside>
@@ -96,9 +96,9 @@
         <main id="conteudo-principal" tabindex="-1">
             <section class="page-intro" id="visao-geral" aria-labelledby="page-intro-title">
                 <div>
-                    <p class="eyebrow">Telemetria SM-WA</p>
-                    <h2 id="page-intro-title">Situação do consumo</h2>
-                    <p class="location-line" id="monitored-device">Identificando dispositivo SM-WA…</p>
+                    <p class="eyebrow">Telemetria SM-WU</p>
+                    <h2 id="page-intro-title">Situação do reservatório</h2>
+                    <p class="location-line" id="monitored-device">Identificando dispositivo SM-WU…</p>
                 </div>
                 <div class="page-intro-meta">
                     <span>Atualização automática</span>
@@ -120,16 +120,16 @@
                     <div class="section-heading">
                         <div>
                             <p class="eyebrow">Leitura mais recente</p>
-                            <h2>Consumo registrado</h2>
+                            <h2>Nível do reservatório</h2>
                         </div>
                         <span class="status-badge is-waiting" id="telemetry-status">Aguardando</span>
                     </div>
 
                     <div class="reservoir-content">
-                        <div class="tank-visual" role="img" aria-label="Sinal Wi-Fi aguardando leitura" id="signal-visual">
-                            <span class="tank-tick tick-75" aria-hidden="true">-60</span>
-                            <span class="tank-tick tick-50" aria-hidden="true">-75</span>
-                            <span class="tank-tick tick-25" aria-hidden="true">-90</span>
+                        <div class="tank-visual" role="img" aria-label="Nível do reservatório aguardando leitura" id="signal-visual">
+                            <span class="tank-tick tick-75" aria-hidden="true">75%</span>
+                            <span class="tank-tick tick-50" aria-hidden="true">50%</span>
+                            <span class="tank-tick tick-25" aria-hidden="true">25%</span>
                             <div class="tank-shell">
                                 <div class="tank-water" id="signal-fill"></div>
                             </div>
@@ -140,11 +140,11 @@
                             <p id="telemetry-classification">Aguardando telemetria</p>
                             <dl class="reservoir-details">
                                 <div>
-                                    <dt>Vazão</dt>
+                                    <dt>Volume</dt>
                                     <dd id="flow-reading">—</dd>
                                 </div>
                                 <div>
-                                    <dt>RSSI Wi-Fi</dt>
+                                    <dt>Distância</dt>
                                     <dd id="wifi-reading">—</dd>
                                 </div>
                             </dl>
@@ -163,16 +163,16 @@
 
                     <div class="metric-primary">
                         <div>
-                            <span class="metric-label">PPL</span>
+                            <span class="metric-label">Nível</span>
                             <strong class="metric-value skeleton-text" id="ppl-reading">—</strong>
-                            <span class="metric-unit" id="ppl-unit">valor informado</span>
+                            <span class="metric-unit" id="ppl-unit">%</span>
                         </div>
                         <span class="metric-context" id="ppl-context">Aguardando leitura do dispositivo</span>
                     </div>
 
                     <div class="metrics-split">
                         <div class="metric-secondary">
-                            <span class="metric-label">Vazão atual</span>
+                            <span class="metric-label">Distância atual</span>
                             <strong class="skeleton-text" id="flow-metric">—</strong>
                             <small id="flow-context">Aguardando leitura</small>
                         </div>
@@ -185,9 +185,9 @@
 
                     <div class="unavailable-readings" aria-label="Demais valores da leitura atual">
                         <div>
-                            <span class="metric-label">Consumo</span>
+                            <span class="metric-label">Volume</span>
                             <strong id="consumption-metric">—</strong>
-                            <small>Valor recebido do SM-WA</small>
+                            <small>Litros informados pelo SM-WU</small>
                         </div>
                         <div>
                             <span class="metric-label">RSSI Wi-Fi</span>
@@ -212,14 +212,14 @@
                 </div>
 
                 <div class="metric-tabs" role="group" aria-label="Métrica exibida no gráfico">
-                    <button class="metric-tab is-active" type="button" data-metric="consumo" aria-pressed="true">Consumo</button>
-                    <button class="metric-tab" type="button" data-metric="vazao" aria-pressed="false">Vazão</button>
-                    <button class="metric-tab" type="button" data-metric="ppl" aria-pressed="false">PPL</button>
+                    <button class="metric-tab is-active" type="button" data-metric="nivel" aria-pressed="true">Nível</button>
+                    <button class="metric-tab" type="button" data-metric="volume" aria-pressed="false">Volume</button>
+                    <button class="metric-tab" type="button" data-metric="distancia" aria-pressed="false">Distância</button>
                     <button class="metric-tab" type="button" data-metric="rssi_wifi" aria-pressed="false">RSSI Wi-Fi</button>
                 </div>
 
                 <div class="chart-stage" id="chart-stage">
-                    <canvas id="history-chart" aria-label="Gráfico das leituras do SM-WA ao longo do tempo" role="img"></canvas>
+                    <canvas id="history-chart" aria-label="Gráfico das leituras do SM-WU ao longo do tempo" role="img"></canvas>
                     <div class="chart-state" id="chart-state" aria-live="polite">
                         <span class="chart-state-icon" aria-hidden="true">≋</span>
                         <strong id="chart-state-title">Carregando histórico</strong>
@@ -260,7 +260,7 @@
                             <span class="device-symbol" aria-hidden="true">▣</span>
                             <span>
                                 <strong id="device-name">Aguardando identificação</strong>
-                                <small id="device-type">Dispositivo de monitoramento hídrico SM-WA</small>
+                                <small id="device-type">Medidor de nível ultrassônico SM-WU</small>
                             </span>
                         </div>
                         <div class="device-health">
@@ -276,9 +276,10 @@
                         <dl>
                             <div><dt>Identificador</dt><dd id="detail-device-id">—</dd></div>
                             <div><dt>Última leitura</dt><dd id="detail-last-reading">—</dd></div>
-                            <div><dt>PPL</dt><dd id="detail-ppl">—</dd></div>
-                            <div><dt>Vazão</dt><dd id="detail-vazao">—</dd></div>
-                            <div><dt>RSSI Wi-Fi</dt><dd id="detail-rssi">—</dd></div>
+                            <div><dt>Nível</dt><dd id="detail-ppl">—</dd></div>
+                            <div><dt>Distância</dt><dd id="detail-vazao">—</dd></div>
+                            <div><dt>Volume</dt><dd id="detail-rssi">—</dd></div>
+                            <div><dt>RSSI Wi-Fi</dt><dd id="detail-wifi">—</dd></div>
                         </dl>
                     </div>
                 </section>
@@ -300,9 +301,9 @@
                             <tr>
                                 <th scope="col">Data e hora</th>
                                 <th scope="col">Dispositivo</th>
-                                <th scope="col" class="numeric">PPL</th>
-                                <th scope="col" class="numeric">Vazão</th>
-                                <th scope="col" class="numeric">Consumo</th>
+                                <th scope="col" class="numeric">Nível</th>
+                                <th scope="col" class="numeric">Distância</th>
+                                <th scope="col" class="numeric">Volume</th>
                                 <th scope="col" class="numeric">RSSI Wi-Fi</th>
                             </tr>
                         </thead>

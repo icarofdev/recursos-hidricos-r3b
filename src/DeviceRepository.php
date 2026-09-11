@@ -22,8 +22,8 @@ final class DeviceRepository
         $this->utc = new DateTimeZone('UTC');
     }
 
-    /** @param array{id:int,ppl:float,vazao:float,consumo:float,rssi_wifi:float} $reading */
-    public function storeReading(array $reading, DateTimeImmutable $receivedAt): void
+    /** @param array{id:int,distancia:float,nivel:float,volume:float,rssi_wifi:float} $reading */
+    public function storeReading(array $reading, DateTimeImmutable $receivedAt, int $dedupWindowSeconds = 0): bool
     {
         $timestamp = $this->databaseTimestamp($receivedAt->setTimezone($this->utc));
 
@@ -31,22 +31,47 @@ final class DeviceRepository
         try {
             $this->touchDevice($reading['id'], 'online', $timestamp);
 
+            if ($dedupWindowSeconds > 0) {
+                $check = $this->database->prepare(
+                    'SELECT distancia, nivel, volume, rssi_wifi, created_at
+                     FROM smwu_readings
+                     WHERE id = :id
+                     ORDER BY created_at DESC, reading_id DESC
+                     LIMIT 1'
+                );
+                $check->execute(['id' => $reading['id']]);
+                $last = $check->fetch();
+                if (is_array($last)) {
+                    $lastTimestamp = (new DateTimeImmutable((string) $last['created_at'], $this->utc))->getTimestamp();
+                    $thisTimestamp = $receivedAt->getTimestamp();
+                    if (abs($thisTimestamp - $lastTimestamp) <= $dedupWindowSeconds
+                        && abs((float) $last['distancia'] - (float) $reading['distancia']) < 0.0001
+                        && abs((float) $last['nivel'] - (float) $reading['nivel']) < 0.0001
+                        && abs((float) $last['volume'] - (float) $reading['volume']) < 0.0001
+                    ) {
+                        $this->database->commit();
+                        return false;
+                    }
+                }
+            }
+
             $statement = $this->database->prepare(
-                'INSERT INTO sensor_readings
-                    (id, ppl, vazao, consumo, rssi_wifi, created_at)
+                'INSERT INTO smwu_readings
+                    (id, distancia, nivel, volume, rssi_wifi, created_at)
                  VALUES
-                    (:id, :ppl, :vazao, :consumo, :rssi_wifi, :created_at)'
+                    (:id, :distancia, :nivel, :volume, :rssi_wifi, :created_at)'
             );
             $statement->execute([
                 'id' => $reading['id'],
-                'ppl' => $reading['ppl'],
-                'vazao' => $reading['vazao'],
-                'consumo' => $reading['consumo'],
+                'distancia' => $reading['distancia'],
+                'nivel' => $reading['nivel'],
+                'volume' => $reading['volume'],
                 'rssi_wifi' => $reading['rssi_wifi'],
                 'created_at' => $timestamp,
             ]);
 
             $this->database->commit();
+            return true;
         } catch (Throwable $exception) {
             if ($this->database->inTransaction()) {
                 $this->database->rollBack();
@@ -88,7 +113,7 @@ final class DeviceRepository
         return $statement->rowCount() > 0;
     }
 
-    /** @return array{device:array{id:int,status:string,last_seen:string,offline_after_seconds:int},data:array{id:int,ppl:float,vazao:float,consumo:float,rssi_wifi:float,timestamp:string}}|null */
+    /** @return array{device:array{id:int,status:string,last_seen:string,offline_after_seconds:int},data:array{id:int,distancia:float,nivel:float,volume:float,rssi_wifi:float,timestamp:string}}|null */
     public function current(?int $id = null, ?DateTimeImmutable $now = null): ?array
     {
         $id ??= $this->latestDeviceId();
@@ -98,9 +123,9 @@ final class DeviceRepository
 
         $statement = $this->database->prepare(
             'SELECT d.id, d.reported_status, d.last_seen,
-                    r.ppl, r.vazao, r.consumo, r.rssi_wifi,
+                    r.distancia, r.nivel, r.volume, r.rssi_wifi,
                     r.created_at AS reading_timestamp
-             FROM sensor_readings r
+             FROM smwu_readings r
              INNER JOIN devices d ON d.id = r.id
              WHERE r.id = :id
              ORDER BY r.created_at DESC, r.reading_id DESC
@@ -118,9 +143,9 @@ final class DeviceRepository
             'device' => $this->deviceFromRow($row, $now),
             'data' => [
                 'id' => (int) $row['id'],
-                'ppl' => (float) $row['ppl'],
-                'vazao' => (float) $row['vazao'],
-                'consumo' => (float) $row['consumo'],
+                'distancia' => (float) $row['distancia'],
+                'nivel' => (float) $row['nivel'],
+                'volume' => (float) $row['volume'],
                 'rssi_wifi' => (float) $row['rssi_wifi'],
                 'timestamp' => $this->apiTimestamp((string) $row['reading_timestamp']),
             ],
@@ -152,7 +177,7 @@ final class DeviceRepository
         return is_array($row) ? $this->deviceFromRow($row, $now) : null;
     }
 
-    /** @return array{id:?int,data:list<array{id:int,ppl:float,vazao:float,consumo:float,rssi_wifi:float,timestamp:string}>} */
+    /** @return array{id:?int,data:list<array{id:int,distancia:float,nivel:float,volume:float,rssi_wifi:float,timestamp:string}>} */
     public function history(?int $id, DateTimeImmutable $since, int $limit): array
     {
         $id ??= $this->latestDeviceId();
@@ -162,8 +187,8 @@ final class DeviceRepository
         }
 
         $statement = $this->database->prepare(
-            'SELECT id, ppl, vazao, consumo, rssi_wifi, created_at
-             FROM sensor_readings
+            'SELECT id, distancia, nivel, volume, rssi_wifi, created_at
+             FROM smwu_readings
              WHERE id = :id AND created_at >= :since
              ORDER BY created_at DESC, reading_id DESC
              LIMIT :limit'
@@ -177,9 +202,9 @@ final class DeviceRepository
         while ($row = $statement->fetch()) {
             $data[] = [
                 'id' => (int) $row['id'],
-                'ppl' => (float) $row['ppl'],
-                'vazao' => (float) $row['vazao'],
-                'consumo' => (float) $row['consumo'],
+                'distancia' => (float) $row['distancia'],
+                'nivel' => (float) $row['nivel'],
+                'volume' => (float) $row['volume'],
                 'rssi_wifi' => (float) $row['rssi_wifi'],
                 'timestamp' => $this->apiTimestamp((string) $row['created_at']),
             ];

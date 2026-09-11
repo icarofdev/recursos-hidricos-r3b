@@ -34,3 +34,25 @@ CREATE TABLE IF NOT EXISTS sensor_readings (
     CONSTRAINT chk_readings_consumo CHECK (consumo >= 0),
     CONSTRAINT chk_readings_rssi CHECK (rssi_wifi >= -200 AND rssi_wifi <= 0)
 ) ENGINE=InnoDB;
+
+-- Leituras do medidor ultrassonico SM-WU. A tabela legada acima e mantida para
+-- preservar eventuais dados do SM-WA existentes na mesma instalacao.
+CREATE TABLE IF NOT EXISTS smwu_readings (
+    reading_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    id BIGINT UNSIGNED NOT NULL,
+    distancia DECIMAL(18, 4) NOT NULL,
+    nivel DECIMAL(7, 4) NOT NULL,
+    volume DECIMAL(18, 4) NOT NULL,
+    rssi_wifi DECIMAL(8, 2) NOT NULL,
+    created_at DATETIME(6) NOT NULL,
+    PRIMARY KEY (reading_id),
+    KEY idx_smwu_readings_id_created (id, created_at, reading_id),
+    KEY idx_smwu_readings_created (created_at, reading_id),
+    CONSTRAINT fk_smwu_readings_device
+        FOREIGN KEY (id) REFERENCES devices (id)
+        ON UPDATE CASCADE ON DELETE CASCADE,
+    CONSTRAINT chk_smwu_readings_distancia CHECK (distancia >= 0),
+    CONSTRAINT chk_smwu_readings_nivel CHECK (nivel >= 0 AND nivel <= 100),
+    CONSTRAINT chk_smwu_readings_volume CHECK (volume >= 0),
+    CONSTRAINT chk_smwu_readings_rssi CHECK (rssi_wifi >= -200 AND rssi_wifi <= 0)
+) ENGINE=InnoDB;

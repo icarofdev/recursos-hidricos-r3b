@@ -12,7 +12,7 @@ api_run(static function (): void {
         throw new R3B\Http\HttpException(
             404,
             'DEVICE_NOT_FOUND',
-            'Nenhuma comunicacao MQTT foi registrada para o dispositivo.'
+            'Nenhuma comunicacao foi registrada para o dispositivo.'
         );
     }
 

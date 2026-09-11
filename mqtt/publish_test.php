@@ -35,9 +35,9 @@ if (!is_string($topic) || $replacementCount !== 1 || str_contains($topic, '+') |
 
 $payload = json_encode([
     'id' => (int) $deviceId,
-    'ppl' => 1.0,
-    'vazao' => 0.0,
-    'consumo' => 1253.0,
+    'distancia' => 42.5,
+    'nivel' => 75.0,
+    'volume' => 1253.0,
     'rssi_wifi' => -60.0,
 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
 

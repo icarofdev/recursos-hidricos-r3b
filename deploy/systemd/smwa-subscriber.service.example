@@ -1,5 +1,5 @@
 [Unit]
-Description=R3B SM-WA MQTT subscriber
+Description=R3B SM-WU MQTT subscriber
 Wants=network-online.target
 After=network-online.target
 

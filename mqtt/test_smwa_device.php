@@ -28,10 +28,10 @@ if (!is_string($topic) || $replacementCount !== 1 || str_contains($topic, '+') |
 
 $payload = json_encode([
     'id' => $id,
-    'ppl' => 2.0,
-    'vazao' => 7.5,
-    'consumo' => 1300,
-    'rssi_wifi' => -48,
+    'distancia' => 42.5,
+    'nivel' => 75.0,
+    'volume' => 1300.0,
+    'rssi_wifi' => -48.0,
 ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRESERVE_ZERO_FRACTION);
 
 try {
@@ -47,7 +47,7 @@ try {
 
     $client->disconnect();
     fwrite(STDOUT, sprintf(
-        "Mensagem SM-WA publicada em %s: %s%s",
+        "Mensagem SM-WU publicada em %s: %s%s",
         $topic,
         $payload,
         PHP_EOL

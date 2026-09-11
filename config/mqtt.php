@@ -13,13 +13,13 @@ function mqtt_config(): array
 
     $allowedDevices = telemetry_allowed_device_ids();
 
-    $clientId = trim(env_value('MQTT_CLIENT_ID', 'sm-wa-php-subscriber') ?: 'sm-wa-php-subscriber');
+    $clientId = trim(env_value('MQTT_CLIENT_ID', 'sm-wu-php-subscriber') ?: 'sm-wu-php-subscriber');
     if (!preg_match('/^[A-Za-z0-9][A-Za-z0-9_-]{0,22}$/', $clientId)) {
         throw new RuntimeException('MQTT_CLIENT_ID deve ter entre 1 e 23 caracteres portaveis.');
     }
 
-    $dataTopic = trim(env_value('MQTT_TOPIC', 'sm-wa/+/data') ?: 'sm-wa/+/data');
-    $statusTopic = trim(env_value('MQTT_STATUS_TOPIC', 'sm-wa/+/status') ?: 'sm-wa/+/status');
+    $dataTopic = trim(env_value('MQTT_TOPIC', 'sm-wu/+/data') ?: 'sm-wu/+/data');
+    $statusTopic = trim(env_value('MQTT_STATUS_TOPIC', 'sm-wu/+/status') ?: 'sm-wu/+/status');
     foreach ([$dataTopic, $statusTopic] as $topicFilter) {
         $levels = explode('/', $topicFilter);
         $wildcardLevels = array_filter($levels, static fn (string $level): bool => $level === '+');

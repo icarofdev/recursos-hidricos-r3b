@@ -7,6 +7,10 @@ require_once dirname(__DIR__, 2) . '/config/telemetry.php';
 
 api_run(static function (): void {
     api_require_post();
+
+    $remoteAddress = (string) ($_SERVER['REMOTE_ADDR'] ?? '127.0.0.1');
+    api_check_rate_limit('ingest_ip_' . $remoteAddress);
+
     api_require_device_token();
 
     $maximumPayloadBytes = telemetry_max_payload_bytes();
@@ -23,10 +27,12 @@ api_run(static function (): void {
     $processor = new R3B\Mqtt\MessageProcessor(
         api_repository(),
         new R3B\Mqtt\PayloadValidator($maximumPayloadBytes, telemetry_allowed_device_ids()),
-        'sm-wa/+/data',
-        'sm-wa/+/status'
+        'sm-wu/+/data',
+        'sm-wu/+/status'
     );
-    $result = $processor->processHttpData($payload);
+    $result = $processor->processHttpData($payload, null, telemetry_min_interval_seconds());
+
+    api_require_device_token($result['id']);
 
     api_json([
         'success' => true,

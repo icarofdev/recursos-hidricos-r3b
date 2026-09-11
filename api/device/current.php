@@ -21,7 +21,7 @@ api_run(static function (): void {
         throw new R3B\Http\HttpException(
             404,
             'NO_DATA',
-            'Nenhuma leitura MQTT foi recebida para o dispositivo.'
+            'Nenhuma leitura de telemetria foi recebida para o dispositivo.'
         );
     }
 

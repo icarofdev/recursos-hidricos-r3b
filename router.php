@@ -18,6 +18,11 @@ if ($relativePath === '' || $relativePath === 'index.php') {
     return true;
 }
 
+if ($relativePath === 'health.php' || $relativePath === 'api/health.php') {
+    require __DIR__ . '/health.php';
+    return true;
+}
+
 $apiRoutes = [
     'api/device/current.php',
     'api/device/history.php',

@@ -24,11 +24,11 @@ function database_connection(bool $reset = false): PDO
     if ($driver === 'mysql') {
         $host = trim(env_value('DB_HOST', '127.0.0.1') ?: '127.0.0.1');
         $port = env_int('DB_PORT', 3306, 1, 65535);
-        $database = trim(env_value('DB_DATABASE', 'recursos_hidricos') ?: 'recursos_hidricos');
+        $database = trim(env_value('DB_DATABASE', env_value('DB_NAME', 'recursos_hidricos')) ?: 'recursos_hidricos');
         $charset = trim(env_value('DB_CHARSET', 'utf8mb4') ?: 'utf8mb4');
 
         if (!preg_match('/^[a-zA-Z0-9_]+$/', $database)) {
-            throw new RuntimeException('DB_DATABASE contem caracteres invalidos.');
+            throw new RuntimeException('DB_DATABASE ou DB_NAME contem caracteres invalidos.');
         }
         if (!preg_match('/^[a-zA-Z0-9_]+$/', $charset)) {
             throw new RuntimeException('DB_CHARSET contem caracteres invalidos.');
@@ -42,9 +42,10 @@ function database_connection(bool $reset = false): PDO
             $charset
         );
         $options[PDO::ATTR_EMULATE_PREPARES] = false;
+        $options[PDO::ATTR_TIMEOUT] = env_int('DB_TIMEOUT', 5, 1, 60);
         $connection = new PDO(
             $dsn,
-            env_value('DB_USERNAME', '') ?? '',
+            env_value('DB_USERNAME', env_value('DB_USER', '')) ?? '',
             env_value('DB_PASSWORD', '') ?? '',
             $options
         );

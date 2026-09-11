@@ -25,3 +25,19 @@ CREATE INDEX IF NOT EXISTS idx_readings_id_created
     ON sensor_readings (id, created_at, reading_id);
 CREATE INDEX IF NOT EXISTS idx_readings_created
     ON sensor_readings (created_at, reading_id);
+
+CREATE TABLE IF NOT EXISTS smwu_readings (
+    reading_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id INTEGER NOT NULL,
+    distancia REAL NOT NULL CHECK (distancia >= 0),
+    nivel REAL NOT NULL CHECK (nivel >= 0 AND nivel <= 100),
+    volume REAL NOT NULL CHECK (volume >= 0),
+    rssi_wifi REAL NOT NULL CHECK (rssi_wifi >= -200 AND rssi_wifi <= 0),
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (id) REFERENCES devices (id) ON UPDATE CASCADE ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_smwu_readings_id_created
+    ON smwu_readings (id, created_at, reading_id);
+CREATE INDEX IF NOT EXISTS idx_smwu_readings_created
+    ON smwu_readings (created_at, reading_id);

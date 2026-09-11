@@ -19,7 +19,7 @@ final class PayloadValidator
         $this->allowedDeviceIds = array_values($allowedDeviceIds);
     }
 
-    /** @return array{id:int,ppl:float,vazao:float,consumo:float,rssi_wifi:float} */
+    /** @return array{id:int,distancia:float,nivel:float,volume:float,rssi_wifi:float} */
     public function validateData(string $topic, string $payload, string $topicFilter): array
     {
         $data = $this->decodeObject($payload);
@@ -32,36 +32,86 @@ final class PayloadValidator
     }
 
     /** Valida o mesmo contrato de telemetria quando a origem e HTTP. */
-    /** @return array{id:int,ppl:float,vazao:float,consumo:float,rssi_wifi:float} */
+    /** @return array{id:int,distancia:float,nivel:float,volume:float,rssi_wifi:float} */
     public function validateHttpData(string $payload): array
     {
-        return $this->validateReading($this->decodeObject($payload));
+        return $this->validateReading($this->normalizeHttpReading($this->decodeObject($payload)));
+    }
+
+    /**
+     * O firmware HTTP da familia SM serializa numeros como strings JSON.
+     * A rota MQTT permanece estrita e nao passa por esta normalizacao.
+     *
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
+    private function normalizeHttpReading(array $data): array
+    {
+        $aliases = [
+            'd' => 'distancia',
+            'distance' => 'distancia',
+            'level' => 'nivel',
+            'volume_litros' => 'volume',
+            'volume_liters' => 'volume',
+        ];
+        $normalized = [];
+        foreach ($data as $field => $value) {
+            $normalizedField = strtolower(trim((string) $field));
+            $normalizedField = $aliases[$normalizedField] ?? $normalizedField;
+            if (array_key_exists($normalizedField, $normalized)) {
+                throw new ValidationException(sprintf('Payload contem campo duplicado: %s.', $normalizedField));
+            }
+            $normalized[$normalizedField] = $value;
+        }
+        $data = $normalized;
+
+        if (isset($data['id']) && is_string($data['id'])) {
+            $id = filter_var(trim($data['id']), FILTER_VALIDATE_INT, [
+                'options' => ['min_range' => 1],
+            ]);
+            if ($id !== false) {
+                $data['id'] = $id;
+            }
+        }
+
+        foreach (['distancia', 'nivel', 'volume', 'rssi_wifi'] as $field) {
+            if (!isset($data[$field]) || !is_string($data[$field])) {
+                continue;
+            }
+
+            $value = trim($data[$field]);
+            if ($value !== '' && is_numeric($value)) {
+                $data[$field] = (float) $value;
+            }
+        }
+
+        return $data;
     }
 
     /** @param array<string, mixed> $data */
     private function validateReading(array $data, ?string $topicDeviceId = null): array
     {
-        $this->rejectUnknownFields($data, ['id', 'ppl', 'vazao', 'consumo', 'rssi_wifi']);
+        $this->rejectUnknownFields($data, ['id', 'distancia', 'nivel', 'volume', 'rssi_wifi']);
         $deviceId = $this->validateDeviceId($data['id'] ?? null);
         if ($topicDeviceId !== null && !hash_equals($topicDeviceId, (string) $deviceId)) {
             throw new ValidationException('id nao corresponde ao identificador do topico.');
         }
 
-        $ppl = $this->requiredNumber($data, 'ppl');
-        $vazao = $this->requiredNumber($data, 'vazao');
-        $consumo = $this->requiredNumber($data, 'consumo');
+        $distancia = $this->requiredNumber($data, 'distancia');
+        $nivel = $this->requiredNumber($data, 'nivel');
+        $volume = $this->requiredNumber($data, 'volume');
         $rssiWifi = $this->requiredNumber($data, 'rssi_wifi');
 
-        $this->validateRange('ppl', $ppl, 0, 1000000000);
-        $this->validateRange('vazao', $vazao, 0, 1000000000000);
-        $this->validateRange('consumo', $consumo, 0, 1000000000000);
+        $this->validateRange('distancia', $distancia, 0, 1000000);
+        $this->validateRange('nivel', $nivel, 0, 100);
+        $this->validateRange('volume', $volume, 0, 1000000000000);
         $this->validateRange('rssi_wifi', $rssiWifi, -200, 0);
 
         return [
             'id' => $deviceId,
-            'ppl' => $ppl,
-            'vazao' => $vazao,
-            'consumo' => $consumo,
+            'distancia' => $distancia,
+            'nivel' => $nivel,
+            'volume' => $volume,
             'rssi_wifi' => $rssiWifi,
         ];
     }

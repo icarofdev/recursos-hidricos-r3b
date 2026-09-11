@@ -27,6 +27,12 @@ function api_error(int $statusCode, string $code, string $message): never
     ], $statusCode);
 }
 
+function api_sanitize_log(string $message): string
+{
+    $redacted = preg_replace('/(token=)[^\s&]+/i', '$1[REDACTED]', $message) ?? $message;
+    return preg_replace('/(Bearer\s+)[^\s"\']+/i', '$1[REDACTED]', $redacted) ?? $redacted;
+}
+
 function api_run(callable $callback): never
 {
     try {
@@ -37,11 +43,11 @@ function api_run(callable $callback): never
     } catch (ValidationException $exception) {
         api_error(422, 'INVALID_TELEMETRY', $exception->getMessage());
     } catch (PDOException $exception) {
-        error_log(sprintf('[API] Database error: %s', $exception->getMessage()));
+        error_log(sprintf('[API] Database error: %s', api_sanitize_log($exception->getMessage())));
         api_error(503, 'DATABASE_UNAVAILABLE', 'Banco de dados temporariamente indisponivel.');
     } catch (Throwable $exception) {
         $errorId = bin2hex(random_bytes(6));
-        error_log(sprintf('[API] Unexpected error %s: %s', $errorId, $exception));
+        error_log(sprintf('[API] Unexpected error %s: %s', $errorId, api_sanitize_log((string) $exception)));
         api_error(500, 'INTERNAL_ERROR', sprintf('Erro interno. Referencia: %s.', $errorId));
     }
 }
@@ -64,10 +70,64 @@ function api_require_post(): void
     }
 }
 
-function api_require_device_token(): void
+function api_request_uses_https(): bool
 {
-    $expected = trim(env_value('SMWA_DEVICE_TOKEN', '') ?? '');
-    if ($expected === '') {
+    $https = strtolower(trim((string) ($_SERVER['HTTPS'] ?? '')));
+    if ($https === 'on' || $https === '1') {
+        return true;
+    }
+
+    $port = (int) ($_SERVER['SERVER_PORT'] ?? 0);
+    if ($port === 443) {
+        return true;
+    }
+
+    $remoteAddress = (string) ($_SERVER['REMOTE_ADDR'] ?? '');
+    if ($remoteAddress === '' || in_array($remoteAddress, ['127.0.0.1', '::1'], true)) {
+        $forwardedProto = strtolower(trim(explode(',', (string) ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? ''))[0]));
+        if ($forwardedProto === 'https') {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function api_extract_device_token(): ?string
+{
+    $authorization = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
+    if (is_string($authorization) && preg_match('/^Bearer\s+(.+)$/i', trim($authorization), $matches)) {
+        return trim($matches[1]);
+    }
+
+    if (isset($_SERVER['HTTP_X_DEVICE_TOKEN']) && is_string($_SERVER['HTTP_X_DEVICE_TOKEN'])) {
+        $token = trim($_SERVER['HTTP_X_DEVICE_TOKEN']);
+        if ($token !== '') {
+            return $token;
+        }
+    }
+
+    $allowHttpToken = function_exists('telemetry_allow_http_ingest')
+        ? telemetry_allow_http_ingest()
+        : env_bool('ALLOW_HTTP_INGEST', true);
+
+    if (isset($_GET['token']) && is_string($_GET['token']) && (api_request_uses_https() || $allowHttpToken)) {
+        $token = trim($_GET['token']);
+        if ($token !== '') {
+            return $token;
+        }
+    }
+
+    return null;
+}
+
+function api_require_device_token(?int $deviceId = null): string
+{
+    $hasConfiguredToken = function_exists('telemetry_device_token_for')
+        ? (telemetry_device_token_for($deviceId) !== null || telemetry_device_token_for(null) !== null)
+        : (trim(env_value('DEVICE_TOKEN_SECRET', env_value('SMWU_DEVICE_TOKEN', env_value('SMWA_DEVICE_TOKEN', ''))) ?? '') !== '');
+
+    if (!$hasConfiguredToken) {
         throw new HttpException(
             503,
             'INGEST_NOT_CONFIGURED',
@@ -75,18 +135,20 @@ function api_require_device_token(): void
         );
     }
 
-    $authorization = $_SERVER['HTTP_AUTHORIZATION'] ?? $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '';
-    $provided = null;
-    if (is_string($authorization) && preg_match('/^Bearer\s+(.+)$/i', trim($authorization), $matches)) {
-        $provided = trim($matches[1]);
-    }
-    if ($provided === null && isset($_SERVER['HTTP_X_DEVICE_TOKEN'])) {
-        $provided = trim((string) $_SERVER['HTTP_X_DEVICE_TOKEN']);
-    }
-
-    if ($provided === null || $provided === '' || !hash_equals($expected, $provided)) {
+    $provided = api_extract_device_token();
+    if ($provided === null || $provided === '') {
         throw new HttpException(401, 'INVALID_DEVICE_TOKEN', 'Token de dispositivo invalido.');
     }
+
+    $isValid = function_exists('telemetry_verify_token')
+        ? telemetry_verify_token($provided, $deviceId)
+        : hash_equals(trim(env_value('DEVICE_TOKEN_SECRET', env_value('SMWU_DEVICE_TOKEN', env_value('SMWA_DEVICE_TOKEN', ''))) ?? ''), $provided);
+
+    if (!$isValid) {
+        throw new HttpException(401, 'INVALID_DEVICE_TOKEN', 'Token de dispositivo invalido.');
+    }
+
+    return $provided;
 }
 
 function api_id(): ?int
@@ -140,4 +202,30 @@ function api_repository(): DeviceRepository
     );
 
     return $repository;
+}
+
+function api_check_rate_limit(string $key, int $limit = 30, int $window = 10): void
+{
+    $tempDir = sys_get_temp_dir();
+    $file = $tempDir . DIRECTORY_SEPARATOR . 'r3b_rate_' . md5($key) . '.json';
+    $now = time();
+    $data = ['count' => 0, 'reset_at' => $now + $window];
+
+    if (is_file($file)) {
+        $content = @file_get_contents($file);
+        if ($content !== false) {
+            $parsed = json_decode($content, true);
+            if (is_array($parsed) && isset($parsed['reset_at']) && $parsed['reset_at'] > $now) {
+                $data = $parsed;
+            }
+        }
+    }
+
+    $data['count']++;
+    @file_put_contents($file, json_encode($data), LOCK_EX);
+
+    if ($data['count'] > $limit) {
+        header('Retry-After: ' . max(1, $data['reset_at'] - $now));
+        throw new HttpException(429, 'RATE_LIMIT_EXCEEDED', 'Muitas requisicoes. Aguarde antes de enviar novamente.');
+    }
 }

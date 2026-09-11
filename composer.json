@@ -1,6 +1,6 @@
 {
     "name": "r3b/recursos-hidricos",
-    "description": "Dashboard PHP e worker MQTT para monitoramento hidrico com SM-WA/ESP32.",
+    "description": "Dashboard PHP e worker MQTT para monitoramento de nivel com SM-WU/ESP32.",
     "type": "project",
     "license": "proprietary",
     "require": {

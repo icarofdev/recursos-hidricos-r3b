@@ -24,6 +24,26 @@ api_run(static function (): void {
         ];
     }
 
+    $current = $repository->current($id);
+    if ($current !== null) {
+        $level = $current['data']['nivel'];
+        if ($level < 20) {
+            $alerts[] = [
+                'type' => 'critical',
+                'message' => sprintf('Nivel critico do reservatorio: %.2f%%.', $level),
+                'timestamp' => $current['data']['timestamp'],
+                'id' => $current['data']['id'],
+            ];
+        } elseif ($level < 40) {
+            $alerts[] = [
+                'type' => 'warning',
+                'message' => sprintf('Nivel baixo do reservatorio: %.2f%%.', $level),
+                'timestamp' => $current['data']['timestamp'],
+                'id' => $current['data']['id'],
+            ];
+        }
+    }
+
     api_json([
         'success' => true,
         'count' => count($alerts),
