@@ -13,3 +13,6 @@
 *.db-shm
 *.db-wal
 
+deploy/vps.env
+deploy/*.env
+*.tar.gz

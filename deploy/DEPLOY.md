@@ -87,6 +87,28 @@ chmod 600 /var/www/recursos-hidricos-r3b/.env
 chmod +x /var/www/recursos-hidricos-r3b/scripts/*.sh
 ```
 
+### Sincronização Contínua a partir da sua Máquina Local
+
+Para subir atualizações do seu PC direto para a VPS sem precisar de git push manual ou expor credenciais:
+
+1. Configure as variáveis de conexão:
+```powershell
+cp deploy/vps.env.example deploy/vps.env
+# Preencha VPS_HOST, VPS_USER, etc. no deploy/vps.env
+```
+
+2. Execute o script correspondente:
+- **No Windows (PowerShell)**:
+  ```powershell
+  .\deploy\sync-vps.ps1
+  ```
+- **No Linux / macOS / Git Bash**:
+  ```bash
+  ./deploy/sync-vps.sh
+  ```
+
+*(O script nunca sobrescreve o `.env` da VPS, ajusta permissões e recarrega os serviços automaticamente).*
+
 ---
 
 ## 6. Configurar Nginx e HTTPS
