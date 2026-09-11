@@ -141,11 +141,12 @@ echo "Restaurando código a partir de `$LATEST_SNAPSHOT..."
 # Copia mantendo arquivos de produção que não façam parte do pacote (.env, backups)
 cp -a "`$LATEST_SNAPSHOT/." '${RemoteDir}/'
 
-`$SUDO_CMD chown -R ${WebUser}:${WebGroup} '${RemoteDir}'
+# Permissões seguras: deploy como dono, www-data como leitor estrito (sem escrita web)
+`$SUDO_CMD chown -R ${VpsUser}:${WebGroup} '${RemoteDir}'
 find '${RemoteDir}' -type d -exec chmod 755 {} +
 find '${RemoteDir}' -type f -exec chmod 644 {} +
 if [ -f '${RemoteDir}/.env' ]; then
-    chmod 600 '${RemoteDir}/.env'
+    chmod 640 '${RemoteDir}/.env'
 fi
 chmod +x '${RemoteDir}'/scripts/*.sh 2>/dev/null || true
 
@@ -314,11 +315,12 @@ if [ "`$(id -u)" -ne 0 ]; then SUDO_CMD="sudo"; fi
 tar -xzf '${RemoteArchive}' -C '${RemoteDir}' --exclude='.env' --exclude='.env.*'
 rm -f '${RemoteArchive}'
 
-`$SUDO_CMD chown -R ${WebUser}:${WebGroup} '${RemoteDir}'
+# Permissões seguras: deploy como dono, www-data como leitor (sem escrita desnecessária)
+`$SUDO_CMD chown -R ${VpsUser}:${WebGroup} '${RemoteDir}'
 find '${RemoteDir}' -type d -exec chmod 755 {} +
 find '${RemoteDir}' -type f -exec chmod 644 {} +
 if [ -f '${RemoteDir}/.env' ]; then
-    chmod 600 '${RemoteDir}/.env'
+    chmod 640 '${RemoteDir}/.env'
 fi
 chmod +x '${RemoteDir}'/scripts/*.sh 2>/dev/null || true
 

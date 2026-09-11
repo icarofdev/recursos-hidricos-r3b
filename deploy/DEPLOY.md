@@ -14,7 +14,7 @@ Navegador   ──HTTPS:443 (Dashboard / Consultas)────────► N
 - **SM-WU**: Envia HTTP direto para a VPS. O PC fica 100% desligado/livre.
 - **Nginx**: Aceita HTTP apenas na rota de ingestão; força HTTPS para todo o resto.
 - **MariaDB**: Acessível estritamente em `127.0.0.1`.
-- **Custo**: 1 única VPS básica (ex: 1 vCPU / 1GB RAM) sem serviços externos pagos.
+- **Custo e Dimensionamento**: 1 única VPS. **Recomendado para produção: 2 vCPU / 4 GB RAM** (garante estabilidade para MariaDB com buffer pool + PHP-FPM + Nginx sem swap). Mínimo absoluto para testes: 1 vCPU / 1 GB RAM.
 
 ---
 

@@ -139,11 +139,12 @@ if [[ "${ROLLBACK}" == "true" ]]; then
         # Copia mantendo arquivos de produção que não façam parte do snapshot (.env, backups)
         cp -a "\${LATEST_SNAPSHOT}/." '${VPS_REMOTE_DIR}/'
 
-        \${SUDO_CMD} chown -R ${WEB_USER}:${WEB_GROUP} '${VPS_REMOTE_DIR}'
+        # Permissões seguras: deploy como dono, www-data como leitor estrito (sem escrita web)
+        ${SUDO_CMD} chown -R ${VPS_USER}:${WEB_GROUP} '${VPS_REMOTE_DIR}'
         find '${VPS_REMOTE_DIR}' -type d -exec chmod 755 {} +
         find '${VPS_REMOTE_DIR}' -type f -exec chmod 644 {} +
         if [ -f '${VPS_REMOTE_DIR}/.env' ]; then
-            chmod 600 '${VPS_REMOTE_DIR}/.env'
+            chmod 640 '${VPS_REMOTE_DIR}/.env'
         fi
         chmod +x '${VPS_REMOTE_DIR}'/scripts/*.sh 2>/dev/null || true
 
@@ -296,11 +297,12 @@ ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" bash -s <<REMOTE_UNTAR
     tar -xzf '${REMOTE_ARCHIVE}' -C '${VPS_REMOTE_DIR}' --exclude='.env' --exclude='.env.*'
     rm -f '${REMOTE_ARCHIVE}'
 
-    \${SUDO_CMD} chown -R ${WEB_USER}:${WEB_GROUP} '${VPS_REMOTE_DIR}'
+    # Permissões seguras: deploy como dono, www-data como leitor (sem escrita desnecessária)
+    ${SUDO_CMD} chown -R ${VPS_USER}:${WEB_GROUP} '${VPS_REMOTE_DIR}'
     find '${VPS_REMOTE_DIR}' -type d -exec chmod 755 {} +
     find '${VPS_REMOTE_DIR}' -type f -exec chmod 644 {} +
     if [ -f '${VPS_REMOTE_DIR}/.env' ]; then
-        chmod 600 '${VPS_REMOTE_DIR}/.env'
+        chmod 640 '${VPS_REMOTE_DIR}/.env'
     fi
     chmod +x '${VPS_REMOTE_DIR}'/scripts/*.sh 2>/dev/null || true
 
