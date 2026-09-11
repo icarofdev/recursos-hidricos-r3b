@@ -50,8 +50,8 @@ chown -R deploy:deploy /home/deploy/.ssh
 cp deploy/sudoers/recursos-hidricos /etc/sudoers.d/recursos-hidricos-deploy
 chmod 440 /etc/sudoers.d/recursos-hidricos-deploy
 
-# 4. Desabilitar login de root com senha no SSH (/etc/ssh/sshd_config)
-sed -i 's/^#*PermitRootLogin.*/PermitRootLogin prohibit-password/' /etc/ssh/sshd_config
+# 4. Desabilitar login de root e senhas no SSH (/etc/ssh/sshd_config)
+sed -i 's/^#*PermitRootLogin.*/PermitRootLogin no/' /etc/ssh/sshd_config
 sed -i 's/^#*PasswordAuthentication.*/PasswordAuthentication no/' /etc/ssh/sshd_config
 systemctl restart ssh
 ```
