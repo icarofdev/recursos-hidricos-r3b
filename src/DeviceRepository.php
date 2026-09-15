@@ -57,12 +57,13 @@ final class DeviceRepository
 
             $statement = $this->database->prepare(
                 'INSERT INTO smwu_readings
-                    (id, distancia, nivel, volume, rssi_wifi, created_at)
+                    (id, reservoir_id, distancia, nivel, volume, rssi_wifi, created_at)
                  VALUES
-                    (:id, :distancia, :nivel, :volume, :rssi_wifi, :created_at)'
+                    (:id, :reservoir_id, :distancia, :nivel, :volume, :rssi_wifi, :created_at)'
             );
             $statement->execute([
                 'id' => $reading['id'],
+                'reservoir_id' => $this->activeReservoirId($reading['id']),
                 'distancia' => $reading['distancia'],
                 'nivel' => $reading['nivel'],
                 'volume' => $reading['volume'],
@@ -213,6 +214,98 @@ final class DeviceRepository
         return ['id' => $id, 'data' => $data];
     }
 
+    /**
+     * Consulta privada com autorização aplicada na própria query. O identificador
+     * recebido é o reservatório, nunca o proprietário enviado pelo navegador.
+     *
+     * @return array{device:array{id:int,status:string,last_seen:string,offline_after_seconds:int},data:array{id:int,distancia:float,nivel:float,volume:float,rssi_wifi:float,timestamp:string}}|null
+     */
+    public function currentForReservoir(int $reservoirId, int $userId, ?DateTimeImmutable $now = null): ?array
+    {
+        $statement = $this->database->prepare(
+            'SELECT d.id, d.reported_status, d.last_seen,
+                    m.distancia, m.nivel, m.volume, m.rssi_wifi,
+                    m.created_at AS reading_timestamp
+             FROM reservoirs r
+             INNER JOIN devices d ON d.id = r.device_id AND d.owner_user_id = r.user_id
+             INNER JOIN smwu_readings m ON m.reservoir_id = r.id AND m.id = d.id
+             WHERE r.id = :reservoir_id AND r.user_id = :user_id AND r.unlinked_at IS NULL
+             ORDER BY m.created_at DESC, m.reading_id DESC
+             LIMIT 1'
+        );
+        $statement->execute(['reservoir_id' => $reservoirId, 'user_id' => $userId]);
+        $row = $statement->fetch();
+        if (!is_array($row)) {
+            return null;
+        }
+        return [
+            'device' => $this->deviceFromRow($row, $now),
+            'data' => [
+                'id' => (int) $row['id'],
+                'distancia' => (float) $row['distancia'],
+                'nivel' => (float) $row['nivel'],
+                'volume' => (float) $row['volume'],
+                'rssi_wifi' => (float) $row['rssi_wifi'],
+                'timestamp' => $this->apiTimestamp((string) $row['reading_timestamp']),
+            ],
+        ];
+    }
+
+    /** @return array{id:int,status:string,last_seen:string,offline_after_seconds:int}|null */
+    public function statusForReservoir(int $reservoirId, int $userId, ?DateTimeImmutable $now = null): ?array
+    {
+        $statement = $this->database->prepare(
+            'SELECT d.id, d.reported_status, d.last_seen
+             FROM reservoirs r
+             INNER JOIN devices d ON d.id = r.device_id AND d.owner_user_id = r.user_id
+             WHERE r.id = :reservoir_id AND r.user_id = :user_id AND r.unlinked_at IS NULL
+             LIMIT 1'
+        );
+        $statement->execute(['reservoir_id' => $reservoirId, 'user_id' => $userId]);
+        $row = $statement->fetch();
+        return is_array($row) ? $this->deviceFromRow($row, $now) : null;
+    }
+
+    /** @return array{id:int,data:list<array{id:int,distancia:float,nivel:float,volume:float,rssi_wifi:float,timestamp:string}>} */
+    public function historyForReservoir(
+        int $reservoirId,
+        int $userId,
+        DateTimeImmutable $since,
+        int $limit
+    ): array {
+        $device = $this->statusForReservoir($reservoirId, $userId);
+        if ($device === null) {
+            throw new \R3B\Http\HttpException(404, 'RESERVOIR_NOT_FOUND', 'Reservatório não encontrado.');
+        }
+        $statement = $this->database->prepare(
+            'SELECT m.id, m.distancia, m.nivel, m.volume, m.rssi_wifi, m.created_at
+             FROM smwu_readings m
+             INNER JOIN reservoirs r ON r.id = m.reservoir_id
+             WHERE r.id = :reservoir_id AND r.user_id = :user_id AND r.unlinked_at IS NULL
+               AND m.created_at >= :since
+             ORDER BY m.created_at DESC, m.reading_id DESC
+             LIMIT :limit'
+        );
+        $statement->bindValue(':reservoir_id', $reservoirId, PDO::PARAM_INT);
+        $statement->bindValue(':user_id', $userId, PDO::PARAM_INT);
+        $statement->bindValue(':since', $this->databaseTimestamp($since->setTimezone($this->utc)), PDO::PARAM_STR);
+        $statement->bindValue(':limit', $limit, PDO::PARAM_INT);
+        $statement->execute();
+
+        $data = [];
+        while ($row = $statement->fetch()) {
+            $data[] = [
+                'id' => (int) $row['id'],
+                'distancia' => (float) $row['distancia'],
+                'nivel' => (float) $row['nivel'],
+                'volume' => (float) $row['volume'],
+                'rssi_wifi' => (float) $row['rssi_wifi'],
+                'timestamp' => $this->apiTimestamp((string) $row['created_at']),
+            ];
+        }
+        return ['id' => $device['id'], 'data' => $data];
+    }
+
     private function latestDeviceId(): ?int
     {
         $row = $this->database->query(
@@ -244,12 +337,13 @@ final class DeviceRepository
         try {
             $insert = $this->database->prepare(
                 'INSERT INTO devices
-                    (id, reported_status, last_seen, created_at, updated_at)
+                    (id, device_code, reported_status, last_seen, created_at, updated_at)
                  VALUES
-                    (:id, :status, :last_seen, :created_at, :updated_at)'
+                    (:id, :device_code, :status, :last_seen, :created_at, :updated_at)'
             );
             $insert->execute([
                 'id' => $id,
+                'device_code' => ReservoirRepository::deviceCode($id),
                 'status' => $status,
                 'last_seen' => $timestamp,
                 'created_at' => $timestamp,
@@ -261,6 +355,21 @@ final class DeviceRepository
             }
             $update->execute($parameters);
         }
+    }
+
+    private function activeReservoirId(int $deviceId): ?int
+    {
+        $statement = $this->database->prepare(
+            'SELECT r.id
+             FROM reservoirs r
+             INNER JOIN devices d ON d.id = r.device_id
+             WHERE r.device_id = :device_id AND r.unlinked_at IS NULL
+               AND d.owner_user_id = r.user_id
+             ORDER BY r.id DESC LIMIT 1'
+        );
+        $statement->execute(['device_id' => $deviceId]);
+        $id = $statement->fetchColumn();
+        return $id === false ? null : (int) $id;
     }
 
     /** @param array<string, mixed> $row

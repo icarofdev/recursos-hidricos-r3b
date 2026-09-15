@@ -18,6 +18,21 @@ if ($relativePath === '' || $relativePath === 'index.php') {
     return true;
 }
 
+$pageRoutes = [
+    'login' => 'login.php',
+    'login.php' => 'login.php',
+    'cadastro' => 'register.php',
+    'register.php' => 'register.php',
+    'esqueci-senha' => 'forgot-password.php',
+    'forgot-password.php' => 'forgot-password.php',
+    'redefinir-senha' => 'reset-password.php',
+    'reset-password.php' => 'reset-password.php',
+];
+if (isset($pageRoutes[$relativePath])) {
+    require __DIR__ . DIRECTORY_SEPARATOR . $pageRoutes[$relativePath];
+    return true;
+}
+
 if ($relativePath === 'health.php' || $relativePath === 'api/health.php') {
     require __DIR__ . '/health.php';
     return true;
@@ -29,6 +44,17 @@ $apiRoutes = [
     'api/device/status.php',
     'api/device/alerts.php',
     'api/device/ingest.php',
+    'api/auth/register.php',
+    'api/auth/login.php',
+    'api/auth/logout.php',
+    'api/auth/me.php',
+    'api/auth/forgot-password.php',
+    'api/auth/reset-password.php',
+    'api/reservoirs/index.php',
+    'api/reservoirs/rename.php',
+    'api/devices/validate-pairing.php',
+    'api/devices/connect.php',
+    'api/devices/unlink.php',
 ];
 if (in_array($relativePath, $apiRoutes, true)) {
     require __DIR__ . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
@@ -37,7 +63,9 @@ if (in_array($relativePath, $apiRoutes, true)) {
 
 $staticRoutes = [
     'static/css/dashboard.css',
+    'static/css/auth.css',
     'static/js/dashboard.js',
+    'static/js/auth.js',
     'static/js/vendor/chart.umd.min.js',
 ];
 if (in_array($relativePath, $staticRoutes, true)) {

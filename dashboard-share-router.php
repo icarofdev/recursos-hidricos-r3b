@@ -45,6 +45,7 @@ $path = is_string($path) ? $path : '/';
 $dynamicRoutes = [
     '/' => __DIR__ . '/index.php',
     '/index.php' => __DIR__ . '/index.php',
+    '/api/reservoirs/index.php' => __DIR__ . '/api/reservoirs/index.php',
     '/api/device/current.php' => __DIR__ . '/api/device/current.php',
     '/api/device/history.php' => __DIR__ . '/api/device/history.php',
     '/api/device/status.php' => __DIR__ . '/api/device/status.php',
@@ -52,6 +53,33 @@ $dynamicRoutes = [
 ];
 
 if (isset($dynamicRoutes[$path])) {
+    require_once APP_ROOT . '/config/database.php';
+    require_once APP_ROOT . '/includes/auth.php';
+
+    $shareEmail = strtolower(trim(env_value('DASHBOARD_SHARE_USER_EMAIL', '') ?? ''));
+    $shareUser = $shareEmail === '' ? null : auth_user_repository()->findByEmail($shareEmail);
+    if ($shareUser === null) {
+        http_response_code(503);
+        header('Content-Type: text/plain; charset=utf-8');
+        header('Cache-Control: no-store');
+        echo 'Conta de compartilhamento nao configurada.';
+        exit;
+    }
+
+    $currentUser = auth_current_user();
+    if ($currentUser === null || $currentUser['id'] !== $shareUser['id']) {
+        auth_login_user([
+            'id' => $shareUser['id'],
+            'name' => $shareUser['name'],
+            'email' => $shareUser['email'],
+            'session_version' => $shareUser['session_version'],
+        ], false);
+    }
+    // A sessão criada por HTTP Basic só pode consultar dados. Mesmo que o
+    // cookie seja reutilizado em outro entrypoint no mesmo host, o CSRF
+    // rejeitará alterações de estado.
+    $_SESSION['dashboard_share_read_only'] = true;
+
     header('X-Content-Type-Options: nosniff');
     header('Referrer-Policy: no-referrer');
     require $dynamicRoutes[$path];

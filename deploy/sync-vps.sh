@@ -306,6 +306,9 @@ ssh "${SSH_OPTS[@]}" "${VPS_USER}@${VPS_HOST}" bash -s <<REMOTE_UNTAR
     fi
     chmod +x '${VPS_REMOTE_DIR}'/scripts/*.sh 2>/dev/null || true
 
+    # Migração incremental: falha o deploy antes do reload se o schema não puder ser atualizado.
+    php '${VPS_REMOTE_DIR}/scripts/migrate.php'
+
     # Registro de auditoria no servidor
     echo "[${DEPLOY_TIMESTAMP}] Deploy executado com sucesso. Commit: ${CURRENT_COMMIT}" >> '${VPS_REMOTE_DIR}/deploy.log'
 REMOTE_UNTAR

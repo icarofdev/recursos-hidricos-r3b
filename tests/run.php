@@ -3,15 +3,39 @@
 declare(strict_types=1);
 
 use R3B\DeviceRepository;
+use R3B\Auth\AuthService;
+use R3B\Auth\PasswordResetService;
+use R3B\Auth\UserRepository;
+use R3B\Database\SchemaMigrator;
+use R3B\Http\HttpException;
+use R3B\Mail\TransactionalMailer;
 use R3B\Mqtt\MessageProcessor;
 use R3B\Mqtt\PayloadValidator;
 use R3B\Mqtt\TopicMatcher;
 use R3B\Mqtt\ValidationException;
+use R3B\ReservoirRepository;
+use R3B\Security\RateLimiter;
 
 require dirname(__DIR__) . DIRECTORY_SEPARATOR . 'vendor' . DIRECTORY_SEPARATOR . 'autoload.php';
 
 final class TestFailure extends RuntimeException
 {
+}
+
+final class FakeMailer implements TransactionalMailer
+{
+    /** @var list<array{name:string,email:string,url:string,ttl:int}> */
+    public array $messages = [];
+
+    public function sendPasswordReset(string $recipientName, string $recipientEmail, string $resetUrl, int $ttlMinutes): void
+    {
+        $this->messages[] = [
+            'name' => $recipientName,
+            'email' => $recipientEmail,
+            'url' => $resetUrl,
+            'ttl' => $ttlMinutes,
+        ];
+    }
 }
 
 /** @var list<array{name:string,callback:Closure():void}> $tests */
@@ -332,7 +356,7 @@ test('Fluxo HTTPS usa o mesmo contrato e persiste leitura atual', static functio
     $receivedAt = new DateTimeImmutable('2026-08-20 12:00:00', new DateTimeZone('UTC'));
 
     expectSame(
-        ['kind' => 'data', 'id' => 1],
+        ['kind' => 'data', 'id' => 1, 'inserted' => true],
         $processor->processHttpData(encodeJson(validReading()), $receivedAt)
     );
 
@@ -347,7 +371,7 @@ test('Fluxo HTTPS normaliza numeros serializados como strings pelo firmware', st
     $receivedAt = new DateTimeImmutable('2026-08-20 12:00:00', new DateTimeZone('UTC'));
 
     expectSame(
-        ['kind' => 'data', 'id' => 1],
+        ['kind' => 'data', 'id' => 1, 'inserted' => true],
         $processor->processHttpData(encodeJson([
             'id' => '1',
             'd' => '42.5',
@@ -415,6 +439,138 @@ test('Consultas sem id escolhem o dispositivo visto mais recentemente', static f
     expectSame(2, $repository->current(null, $base->modify('+61 seconds'))['device']['id']);
     expectSame(2, $repository->status(null, $base->modify('+61 seconds'))['id']);
     expectSame(2, $repository->history(null, $base->modify('-1 second'), 10)['id']);
+});
+
+test('Migração multiusuário é incremental e idempotente no schema legado', static function (): void {
+    $database = new PDO('sqlite::memory:');
+    $database->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+    $database->setAttribute(PDO::ATTR_DEFAULT_FETCH_MODE, PDO::FETCH_ASSOC);
+    $database->exec('CREATE TABLE devices (
+        id INTEGER PRIMARY KEY, reported_status TEXT NOT NULL, last_seen TEXT NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    )');
+    $database->exec('CREATE TABLE smwu_readings (
+        reading_id INTEGER PRIMARY KEY AUTOINCREMENT, id INTEGER NOT NULL,
+        distancia REAL NOT NULL, nivel REAL NOT NULL, volume REAL NOT NULL,
+        rssi_wifi REAL NOT NULL, created_at TEXT NOT NULL
+    )');
+    $database->exec("INSERT INTO devices VALUES (1, 'online', '2026-08-20 12:00:00', '2026-08-20 12:00:00', '2026-08-20 12:00:00')");
+
+    $migrator = new SchemaMigrator($database);
+    $migrator->migrate();
+    $migrator->migrate();
+
+    expectSame(1, (int) $database->query('SELECT COUNT(*) FROM devices')->fetchColumn(), 'O dispositivo legado deve ser preservado.');
+    expectSame(1, (int) $database->query('SELECT COUNT(*) FROM schema_migrations')->fetchColumn());
+    expectSame('users', (string) $database->query("SELECT name FROM sqlite_master WHERE type='table' AND name='users'")->fetchColumn());
+    $columns = array_column($database->query('PRAGMA table_info(smwu_readings)')->fetchAll(), 'name');
+    expectTrue(in_array('reservoir_id', $columns, true), 'A leitura deve receber a coluna de escopo.');
+});
+
+test('Cadastro, login e credenciais inválidas usam hash seguro', static function (): void {
+    $database = testDatabase();
+    $users = new UserRepository($database);
+    $auth = new AuthService($users);
+    $created = $auth->register('  Maria   da Silva  ', ' MARIA@EXEMPLO.COM ', 'SenhaForte2026', 'SenhaForte2026');
+
+    expectSame('Maria da Silva', $created['name']);
+    expectSame('maria@exemplo.com', $created['email']);
+    $stored = $users->findByEmail('maria@exemplo.com');
+    expectTrue($stored !== null && $stored['password_hash'] !== 'SenhaForte2026', 'Senha não pode ser armazenada em texto puro.');
+    expectTrue(password_verify('SenhaForte2026', $stored['password_hash']), 'Hash deve validar a senha.');
+    expectSame($created['id'], $auth->login('maria@exemplo.com', 'SenhaForte2026')['id']);
+    expectThrows(HttpException::class, static fn () => $auth->login('maria@exemplo.com', 'incorreta'), 'inválidos');
+    expectThrows(HttpException::class, static fn () => $auth->register('Outro', 'maria@exemplo.com', 'OutraSenha2026', 'OutraSenha2026'), 'Já existe');
+});
+
+test('Recuperação não enumera contas e armazena somente hash do token', static function (): void {
+    $database = testDatabase();
+    $users = new UserRepository($database);
+    $auth = new AuthService($users);
+    $auth->register('Paulo Lima', 'paulo@example.com', 'SenhaForte2026', 'SenhaForte2026');
+    $mailer = new FakeMailer();
+    $service = new PasswordResetService($database, $users, $mailer, 'https://hidra.example', 20);
+    $now = new DateTimeImmutable('2026-09-15 12:00:00', new DateTimeZone('UTC'));
+
+    $service->request('nao-existe@example.com', $now);
+    expectSame(0, count($mailer->messages), 'Conta inexistente não envia mensagem.');
+    $service->request('paulo@example.com', $now);
+    expectSame(1, count($mailer->messages));
+    expectSame(20, $mailer->messages[0]['ttl']);
+    $query = parse_url($mailer->messages[0]['url'], PHP_URL_QUERY);
+    parse_str((string) $query, $parameters);
+    $token = (string) ($parameters['token'] ?? '');
+    expectTrue(strlen($token) === 43, 'Token deve conter 256 bits codificados.');
+    $stored = $database->query('SELECT token_hash FROM password_reset_tokens')->fetchColumn();
+    expectSame(hash('sha256', $token), $stored);
+    expectTrue(!str_contains((string) $stored, $token), 'O token puro não pode estar no banco.');
+    expectTrue($service->isValid($token, $now->modify('+19 minutes')), 'Token deve ser válido antes do vencimento.');
+    expectTrue(!$service->isValid('token-invalido', $now), 'Token malformado deve ser rejeitado.');
+});
+
+test('Token de senha válido é único, expira e revoga sessões anteriores', static function (): void {
+    $database = testDatabase();
+    $users = new UserRepository($database);
+    $auth = new AuthService($users);
+    $user = $auth->register('Ana Souza', 'ana@example.com', 'SenhaAntiga2026', 'SenhaAntiga2026');
+    $mailer = new FakeMailer();
+    $service = new PasswordResetService($database, $users, $mailer, 'https://hidra.example', 20);
+    $now = new DateTimeImmutable('2026-09-15 12:00:00', new DateTimeZone('UTC'));
+    $service->request('ana@example.com', $now);
+    parse_str((string) parse_url($mailer->messages[0]['url'], PHP_URL_QUERY), $parameters);
+    $token = (string) $parameters['token'];
+
+    $service->reset($token, 'SenhaNova2026', 'SenhaNova2026', $now->modify('+5 minutes'));
+    expectSame($user['session_version'] + 1, $users->findById($user['id'])['session_version']);
+    expectSame($user['id'], $auth->login('ana@example.com', 'SenhaNova2026')['id']);
+    expectThrows(HttpException::class, static fn () => $service->reset($token, 'OutraSenha2026', 'OutraSenha2026', $now->modify('+6 minutes')), 'utilizado');
+
+    $service->request('ana@example.com', $now);
+    parse_str((string) parse_url($mailer->messages[1]['url'], PHP_URL_QUERY), $secondParameters);
+    $expiredToken = (string) $secondParameters['token'];
+    expectTrue(!$service->isValid($expiredToken, $now->modify('+21 minutes')), 'Token expirado deve ser rejeitado.');
+    expectThrows(HttpException::class, static fn () => $service->reset($expiredToken, 'TerceiraSenha2026', 'TerceiraSenha2026', $now->modify('+21 minutes')), 'expirou');
+});
+
+test('Pareamento, isolamento contra IDOR, renomeação e desvinculação preservam histórico', static function (): void {
+    $database = testDatabase();
+    $users = new UserRepository($database);
+    $auth = new AuthService($users);
+    $owner = $auth->register('Proprietário A', 'a@example.com', 'SenhaForte2026', 'SenhaForte2026');
+    $other = $auth->register('Proprietário B', 'b@example.com', 'SenhaForte2026', 'SenhaForte2026');
+    $devices = new DeviceRepository($database, 90, new DateTimeZone('America/Sao_Paulo'));
+    $processor = new MessageProcessor($devices, new PayloadValidator(4096, ['1']), 'sm-wu/+/data', 'sm-wu/+/status');
+    $now = new DateTimeImmutable('now', new DateTimeZone('UTC'));
+    $processor->process('sm-wu/1/data', encodeJson(validReading()), $now);
+    $reservoirs = new ReservoirRepository($database, 90, new DateTimeZone('America/Sao_Paulo'));
+
+    $pairingCode = $reservoirs->provisionPairingCode(1, 60);
+    expectSame('online', $reservoirs->validatePairingCode($pairingCode, $now)['status']);
+    expectThrows(HttpException::class, static fn () => $reservoirs->validatePairingCode('HIDRA-AAAA-BBBB-CCCC-DDDD'), 'inválido');
+    $reservoir = $reservoirs->connect($owner['id'], $pairingCode, ' Caixa   superior ', $now);
+    expectSame('Caixa superior', $reservoir['name']);
+    expectTrue($devices->currentForReservoir($reservoir['id'], $owner['id'], $now->modify('+1 second')) !== null, 'Proprietário deve acessar a própria leitura.');
+    expectSame(null, $devices->currentForReservoir($reservoir['id'], $other['id'], $now->modify('+1 second')), 'Usuário B não pode ler recurso de A.');
+    expectSame(null, $reservoirs->findOwned($reservoir['id'], $other['id']), 'Usuário B não pode descobrir recurso de A.');
+    expectThrows(HttpException::class, static fn () => $reservoirs->connect($other['id'], $pairingCode, 'Invasão', $now), 'já está vinculado');
+
+    $renamed = $reservoirs->rename($reservoir['id'], $owner['id'], 'Reserva técnica');
+    expectSame('Reserva técnica', $renamed['name']);
+    expectThrows(HttpException::class, static fn () => $reservoirs->rename($reservoir['id'], $other['id'], 'Outro nome'), 'não encontrado');
+    $reservoirs->unlink($reservoir['id'], $owner['id'], $now->modify('+1 minute'));
+    expectSame(null, $reservoirs->findOwned($reservoir['id'], $owner['id']));
+    expectSame(1, (int) $database->query('SELECT COUNT(*) FROM smwu_readings WHERE reservoir_id IS NOT NULL')->fetchColumn(), 'Desvincular não apaga nem remove o escopo histórico.');
+    expectThrows(HttpException::class, static fn () => $reservoirs->validatePairingCode($pairingCode), 'inválido');
+});
+
+test('Rate limiting bloqueia excesso sem armazenar identificador em claro', static function (): void {
+    $database = testDatabase();
+    $limiter = new RateLimiter($database, 'segredo-de-teste');
+    expectSame(0, $limiter->consume('login', 'Pessoa@Example.com', 2, 60, 1000));
+    expectSame(0, $limiter->consume('login', 'pessoa@example.com', 2, 60, 1001));
+    expectSame(58, $limiter->consume('login', 'pessoa@example.com', 2, 60, 1002));
+    $storedKey = (string) $database->query('SELECT key_hash FROM rate_limits')->fetchColumn();
+    expectTrue(!str_contains($storedKey, 'pessoa'), 'Identificador deve ser armazenado apenas como HMAC.');
 });
 
 $failures = 0;

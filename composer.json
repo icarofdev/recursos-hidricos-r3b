@@ -25,7 +25,10 @@
         "sort-packages": true
     },
     "scripts": {
-        "test": "@php tests/run.php"
+        "test:unit": "@php tests/run.php",
+        "test:http": "node tests/http-integration.mjs",
+        "test": ["@test:unit", "@test:http"],
+        "migrate": "@php scripts/migrate.php"
     },
     "minimum-stability": "stable",
     "prefer-stable": true

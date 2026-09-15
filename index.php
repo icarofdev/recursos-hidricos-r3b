@@ -1,10 +1,25 @@
+<?php
+
+declare(strict_types=1);
+
+require_once __DIR__ . '/config/bootstrap.php';
+require_once APP_ROOT . '/config/database.php';
+require_once APP_ROOT . '/includes/auth.php';
+
+$currentUser = auth_require_page();
+web_security_headers();
+$escape = static fn (string $value): string => htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+$initial = function_exists('mb_substr') ? mb_substr($currentUser['name'], 0, 1) : substr($currentUser['name'], 0, 1);
+?>
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Painel de nível, distância e volume em tempo real do dispositivo SM-WU da R3B.">
-    <title>Hidra R3B — Monitoramento hídrico</title>
+    <meta name="description" content="Central de monitoramento do reservatório Hidra R3B com telemetria em tempo real.">
+    <meta name="theme-color" content="#0b2638">
+    <meta name="csrf-token" content="<?= $escape(auth_csrf_token()) ?>">
+    <title>Hidra R3B — Central de Monitoramento</title>
     <link rel="stylesheet" href="static/css/dashboard.css">
     <script defer src="static/js/vendor/chart.umd.min.js"></script>
     <script defer src="static/js/dashboard.js"></script>
@@ -12,333 +27,216 @@
 <body class="is-loading">
     <a class="skip-link" href="#conteudo-principal">Ir para o conteúdo principal</a>
 
+    <svg class="icon-sprite" aria-hidden="true">
+        <symbol id="icon-overview" viewBox="0 0 24 24"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z"/></symbol>
+        <symbol id="icon-activity" viewBox="0 0 24 24"><path d="M3 12h4l2.2-6 4 12 2.2-6H21"/></symbol>
+        <symbol id="icon-history" viewBox="0 0 24 24"><path d="M4 4v5h5M5.2 16.8A8 8 0 1 0 4.6 8M12 8v4l3 2"/></symbol>
+        <symbol id="icon-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4"/></symbol>
+        <symbol id="icon-device" viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M9 7h6M9 17h6"/></symbol>
+        <symbol id="icon-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6 1.7 1.7 0 0 0 10 3v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></symbol>
+        <symbol id="icon-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+        <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+        <symbol id="icon-droplet" viewBox="0 0 24 24"><path d="M12 2S5.5 9 5.5 14.5a6.5 6.5 0 0 0 13 0C18.5 9 12 2 12 2Z"/></symbol>
+        <symbol id="icon-volume" viewBox="0 0 24 24"><path d="M5 4h14l-1 16H6L5 4Z"/><path d="M7 14c2-1 3 1 5 0s3 1 5 0"/></symbol>
+        <symbol id="icon-consumption" viewBox="0 0 24 24"><path d="M12 3v12M8 11l4 4 4-4M5 20h14"/></symbol>
+        <symbol id="icon-shield" viewBox="0 0 24 24"><path d="M12 3 5 6v5c0 5 3 8 7 10 4-2 7-5 7-10V6l-7-3Z"/><path d="m9 12 2 2 4-4"/></symbol>
+        <symbol id="icon-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+        <symbol id="icon-refresh" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M6.1 8A7 7 0 0 1 18.7 7M5.3 17A7 7 0 0 0 17.9 16"/></symbol>
+        <symbol id="icon-signal" viewBox="0 0 24 24"><path d="M5 9a10 10 0 0 1 14 0M8 12a6 6 0 0 1 8 0M11 15a2 2 0 0 1 2 0"/><circle cx="12" cy="18" r="1"/></symbol>
+        <symbol id="icon-chevron" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
+        <symbol id="icon-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></symbol>
+        <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+        <symbol id="icon-logout" viewBox="0 0 24 24"><path d="M10 5H5v14h5M14 8l4 4-4 4M8 12h10"/></symbol>
+    </svg>
+
     <div class="mobile-overlay" id="mobile-overlay" aria-hidden="true"></div>
 
     <aside class="sidebar" id="sidebar" aria-label="Navegação principal">
         <div class="brand">
-            <span class="brand-mark" aria-hidden="true"><span></span></span>
-            <span class="brand-copy">
-                <strong>Hidra</strong>
-                <small>monitoramento R3B</small>
-            </span>
-            <button class="icon-button sidebar-close" id="sidebar-close" type="button" aria-label="Fechar menu">
-                <span aria-hidden="true">×</span>
-            </button>
+            <span class="brand-mark" aria-hidden="true"><svg><use href="#icon-droplet"></use></svg></span>
+            <span class="brand-copy"><strong>Hidra <b>R3B</b></strong><small>Central de Monitoramento</small></span>
+            <button class="icon-button sidebar-close" id="sidebar-close" type="button" aria-label="Fechar menu"><svg aria-hidden="true"><use href="#icon-close"></use></svg></button>
         </div>
 
+        <p class="nav-label">Navegação</p>
         <nav class="primary-nav" aria-label="Seções da dashboard">
-            <a class="nav-link is-active" href="#visao-geral" data-section="visao-geral" aria-current="page">
-                <span class="nav-icon" aria-hidden="true">⌂</span>
-                <span>Visão geral</span>
-            </a>
-            <a class="nav-link" href="#monitoramento" data-section="monitoramento">
-                <span class="nav-icon" aria-hidden="true">≋</span>
-                <span>Monitoramento</span>
-            </a>
-            <a class="nav-link" href="#historico" data-section="historico">
-                <span class="nav-icon" aria-hidden="true">↺</span>
-                <span>Histórico</span>
-            </a>
-            <a class="nav-link" href="#alertas" data-section="alertas">
-                <span class="nav-icon" aria-hidden="true">!</span>
-                <span>Alertas</span>
-                <span class="nav-count" id="nav-alert-count" aria-label="0 alertas">0</span>
-            </a>
-            <a class="nav-link" href="#dispositivos" data-section="dispositivos">
-                <span class="nav-icon" aria-hidden="true">▣</span>
-                <span>Dispositivos</span>
-            </a>
-            <a class="nav-link" href="#configuracoes" data-section="configuracoes">
-                <span class="nav-icon" aria-hidden="true">⚙</span>
-                <span>Configurações</span>
-            </a>
+            <a class="nav-link is-active" href="#visao-geral" data-section="visao-geral" aria-current="page"><svg aria-hidden="true"><use href="#icon-overview"></use></svg><span>Visão geral</span></a>
+            <a class="nav-link" href="#monitoramento" data-section="monitoramento"><svg aria-hidden="true"><use href="#icon-activity"></use></svg><span>Monitoramento</span></a>
+            <a class="nav-link" href="#historico" data-section="historico"><svg aria-hidden="true"><use href="#icon-history"></use></svg><span>Histórico</span></a>
+            <a class="nav-link" href="#alertas" data-section="alertas"><svg aria-hidden="true"><use href="#icon-bell"></use></svg><span>Alertas</span><span class="nav-count" id="nav-alert-count" aria-label="0 alertas">0</span></a>
+            <a class="nav-link" href="#dispositivos" data-section="dispositivos"><svg aria-hidden="true"><use href="#icon-device"></use></svg><span>Dispositivos</span></a>
+            <a class="nav-link" href="#configuracoes" data-section="configuracoes"><svg aria-hidden="true"><use href="#icon-settings"></use></svg><span>Configurações</span></a>
         </nav>
 
-        <div class="sidebar-footer">
-            <span class="sidebar-footer-dot" aria-hidden="true"></span>
-            <span>
-                <strong>Coleta automática</strong>
-                <small>Fonte: dispositivo SM-WU</small>
-            </span>
-        </div>
+        <div class="sidebar-footer"><span class="pulse-dot" aria-hidden="true"></span><span><strong>Coleta automática</strong><small>Telemetria SM-WU</small></span></div>
     </aside>
 
     <div class="app-shell">
         <header class="topbar">
             <div class="topbar-title">
-                <button class="icon-button menu-button" id="menu-button" type="button" aria-label="Abrir menu" aria-controls="sidebar" aria-expanded="false">
-                    <span aria-hidden="true">☰</span>
-                </button>
-                <div>
-                    <p class="eyebrow">Central de monitoramento</p>
-                    <h1>Visão geral</h1>
-                </div>
+                <button class="icon-button menu-button" id="menu-button" type="button" aria-label="Abrir menu" aria-controls="sidebar" aria-expanded="false"><svg aria-hidden="true"><use href="#icon-menu"></use></svg></button>
+                <div><p class="eyebrow">Central de Monitoramento</p><h1 id="topbar-reservoir-name">Reservatório</h1></div>
             </div>
-
             <div class="topbar-actions">
-                <div class="connection-brief" id="connection-brief" role="status" aria-live="polite">
-                    <span class="status-dot is-waiting" id="connection-dot" aria-hidden="true"></span>
-                    <span>
-                        <strong id="connection-label">Conectando</strong>
-                        <small id="updated-label">Aguardando dados</small>
-                    </span>
-                </div>
-                <div class="local-profile" aria-label="Sessão sem autenticação">
-                    <span class="profile-avatar" aria-hidden="true">R3</span>
-                    <span>
-                        <strong>Sessão local</strong>
-                        <small>Sem autenticação</small>
-                    </span>
+                <div class="topbar-meta" aria-label="Última atualização"><svg aria-hidden="true"><use href="#icon-clock"></use></svg><span><small>Última atualização</small><strong id="updated-label">Aguardando dados</strong></span></div>
+                <div class="connection-brief" id="connection-brief" role="status" aria-live="polite"><span class="status-dot is-waiting" id="connection-dot" aria-hidden="true"></span><span><small>Status do dispositivo</small><strong id="connection-label">Conectando</strong></span></div>
+                <div class="account-menu-wrap">
+                    <button class="account-trigger" id="account-trigger" type="button" aria-haspopup="menu" aria-expanded="false">
+                        <span class="account-avatar" aria-hidden="true"><?= $escape(strtoupper($initial)) ?></span>
+                        <span class="account-summary"><strong><?= $escape($currentUser['name']) ?></strong><small><?= $escape($currentUser['email']) ?></small></span>
+                        <svg aria-hidden="true"><use href="#icon-chevron"></use></svg>
+                    </button>
+                    <div class="account-dropdown" id="account-dropdown" role="menu" hidden>
+                        <button type="button" role="menuitem" id="open-account"><svg aria-hidden="true"><use href="#icon-user"></use></svg>Minha conta</button>
+                        <a href="#configuracoes" role="menuitem"><svg aria-hidden="true"><use href="#icon-settings"></use></svg>Configurações</a>
+                        <button type="button" role="menuitem" id="logout-button"><svg aria-hidden="true"><use href="#icon-logout"></use></svg>Sair</button>
+                    </div>
                 </div>
             </div>
         </header>
 
         <main id="conteudo-principal" tabindex="-1">
             <section class="page-intro" id="visao-geral" aria-labelledby="page-intro-title">
-                <div>
-                    <p class="eyebrow">Telemetria SM-WU</p>
-                    <h2 id="page-intro-title">Situação do reservatório</h2>
-                    <p class="location-line" id="monitored-device">Identificando dispositivo SM-WU…</p>
-                </div>
-                <div class="page-intro-meta">
-                    <span>Atualização automática</span>
-                    <strong id="refresh-rate-label">a cada 5 segundos</strong>
+                <div><div class="breadcrumb"><span>Hidra R3B</span><svg aria-hidden="true"><use href="#icon-chevron"></use></svg><span>Visão geral</span></div><h2 id="page-intro-title">Visão geral do sistema</h2><p class="location-line" id="monitored-device">Carregando seus reservatórios…</p></div>
+                <div class="page-intro-actions">
+                    <label class="reservoir-picker" for="reservoir-select"><span>Reservatório</span><select id="reservoir-select" aria-label="Selecionar reservatório"><option>Carregando…</option></select></label>
+                    <button class="primary-button compact-button" id="connect-device-top" type="button"><svg aria-hidden="true"><use href="#icon-plus"></use></svg>Conectar dispositivo</button>
+                    <div class="live-chip"><span class="pulse-dot" aria-hidden="true"></span><span>Atualização automática <strong id="refresh-rate-label">a cada 5 segundos</strong></span></div>
                 </div>
             </section>
+
+            <section class="welcome-state" id="welcome-state" hidden aria-labelledby="welcome-title">
+                <span class="welcome-symbol" aria-hidden="true"><svg><use href="#icon-droplet"></use></svg></span>
+                <p class="eyebrow">Primeiro acesso</p>
+                <h2 id="welcome-title">Bem-vindo ao Hidra R3B</h2>
+                <p>Você ainda não possui nenhum dispositivo conectado.</p>
+                <button class="primary-button" id="connect-first-device" type="button"><svg aria-hidden="true"><use href="#icon-plus"></use></svg>Conectar dispositivo</button>
+            </section>
+
+            <div class="dashboard-content" id="dashboard-content">
 
             <section class="system-status is-loading" id="system-status" aria-live="assertive" aria-atomic="true">
-                <span class="system-status-icon" aria-hidden="true">•</span>
-                <div>
-                    <strong id="system-status-title">Verificando o sistema</strong>
-                    <span id="system-status-description">Buscando a leitura mais recente e o histórico do dispositivo.</span>
-                </div>
+                <span class="system-status-icon" aria-hidden="true"><svg><use href="#icon-refresh"></use></svg></span>
+                <div><strong id="system-status-title">Verificando o sistema</strong><span id="system-status-description">Buscando a leitura mais recente e o histórico do dispositivo.</span></div>
                 <span class="system-status-time" id="system-status-time">Agora</span>
+                <button class="secondary-button" id="retry-button" type="button" hidden><svg aria-hidden="true"><use href="#icon-refresh"></use></svg>Tentar novamente</button>
             </section>
 
-            <section class="overview-layout" aria-label="Resumo do sistema">
-                <article class="surface reservoir-panel">
-                    <div class="section-heading">
-                        <div>
-                            <p class="eyebrow">Leitura mais recente</p>
-                            <h2>Nível do reservatório</h2>
-                        </div>
-                        <span class="status-badge is-waiting" id="telemetry-status">Aguardando</span>
-                    </div>
+            <section class="kpi-grid" aria-label="Indicadores principais">
+                <article class="metric-card metric-card-primary"><span class="metric-icon"><svg aria-hidden="true"><use href="#icon-droplet"></use></svg></span><div class="metric-card-copy"><span class="metric-label">Nível atual</span><div><strong class="metric-value skeleton-text" id="ppl-reading">—</strong><span class="metric-unit" id="ppl-unit">%</span></div><small id="ppl-context">Aguardando leitura</small></div></article>
+                <article class="metric-card"><span class="metric-icon"><svg aria-hidden="true"><use href="#icon-volume"></use></svg></span><div class="metric-card-copy"><span class="metric-label">Volume atual</span><div><strong class="metric-value skeleton-text" id="consumption-metric">—</strong><span class="metric-unit" id="volume-unit">L</span></div><small id="volume-context">Capacidade não informada</small></div></article>
+                <article class="metric-card"><span class="metric-icon"><svg aria-hidden="true"><use href="#icon-consumption"></use></svg></span><div class="metric-card-copy"><span class="metric-label">Consumo hoje</span><div><strong class="metric-value skeleton-text" id="daily-consumption-reading">—</strong><span class="metric-unit" id="daily-consumption-unit">L</span></div><small id="daily-consumption-context">Aguardando histórico</small></div></article>
+                <article class="metric-card"><span class="metric-icon"><svg aria-hidden="true"><use href="#icon-shield"></use></svg></span><div class="metric-card-copy"><span class="metric-label">Estado do reservatório</span><div><strong class="metric-status skeleton-text" id="level-state-reading">—</strong></div><small id="level-state-context">Aguardando telemetria</small></div></article>
+            </section>
 
-                    <div class="reservoir-content">
-                        <div class="tank-visual" role="img" aria-label="Nível do reservatório aguardando leitura" id="signal-visual">
-                            <span class="tank-tick tick-75" aria-hidden="true">75%</span>
-                            <span class="tank-tick tick-50" aria-hidden="true">50%</span>
-                            <span class="tank-tick tick-25" aria-hidden="true">25%</span>
-                            <div class="tank-shell">
-                                <div class="tank-water" id="signal-fill"></div>
-                            </div>
-                        </div>
-
-                        <div class="reservoir-reading">
-                            <div class="primary-reading skeleton-text" id="consumption-reading">—</div>
-                            <p id="telemetry-classification">Aguardando telemetria</p>
-                            <dl class="reservoir-details">
-                                <div>
-                                    <dt>Volume</dt>
-                                    <dd id="flow-reading">—</dd>
-                                </div>
-                                <div>
-                                    <dt>Distância</dt>
-                                    <dd id="wifi-reading">—</dd>
-                                </div>
-                            </dl>
-                        </div>
+            <section class="surface reservoir-panel" aria-labelledby="reservoir-title">
+                <div class="section-heading"><div><p class="eyebrow">Telemetria em tempo real</p><h2 id="reservoir-title">Nível do reservatório</h2></div><span class="status-badge is-waiting" id="telemetry-status">Aguardando</span></div>
+                <div class="reservoir-content">
+                    <div class="tank-area">
+                        <div class="tank-visual" role="img" aria-label="Nível do reservatório aguardando leitura" id="signal-visual"><div class="tank-scale" aria-hidden="true"><span>100</span><span>75</span><span>50</span><span>25</span><span>0</span></div><div class="tank-shell"><div class="tank-water" id="signal-fill"><span class="water-surface"></span></div></div></div>
+                        <span class="tank-caption">Percentual de enchimento</span>
                     </div>
-                </article>
-
-                <section class="metrics-panel" aria-labelledby="metrics-title">
-                    <div class="section-heading compact-heading">
-                        <div>
-                            <p class="eyebrow">Leituras essenciais</p>
-                            <h2 id="metrics-title">Agora</h2>
-                        </div>
-                        <span class="section-note" id="metric-timestamp">Sem leitura</span>
+                    <div class="reservoir-reading">
+                        <p class="reading-label">Nível atual</p><div class="primary-reading skeleton-text" id="consumption-reading">—</div><p id="telemetry-classification">Aguardando telemetria</p><div class="level-track" aria-hidden="true"><span id="level-track-fill"></span></div>
+                        <dl class="reservoir-details"><div><dt>Volume atual</dt><dd id="flow-reading">—</dd></div><div><dt>Capacidade total</dt><dd id="capacity-reading">Não informada</dd></div><div><dt>Distância do sensor</dt><dd id="wifi-reading">—</dd></div><div><dt>Intensidade Wi-Fi</dt><dd id="rssi-metric">—</dd></div></dl>
                     </div>
-
-                    <div class="metric-primary">
-                        <div>
-                            <span class="metric-label">Nível</span>
-                            <strong class="metric-value skeleton-text" id="ppl-reading">—</strong>
-                            <span class="metric-unit" id="ppl-unit">%</span>
-                        </div>
-                        <span class="metric-context" id="ppl-context">Aguardando leitura do dispositivo</span>
-                    </div>
-
-                    <div class="metrics-split">
-                        <div class="metric-secondary">
-                            <span class="metric-label">Distância atual</span>
-                            <strong class="skeleton-text" id="flow-metric">—</strong>
-                            <small id="flow-context">Aguardando leitura</small>
-                        </div>
-                        <div class="metric-secondary">
-                            <span class="metric-label">Dispositivo</span>
-                            <strong class="skeleton-text" id="device-state-reading">—</strong>
-                            <small id="device-state-context">Verificando comunicação</small>
-                        </div>
-                    </div>
-
-                    <div class="unavailable-readings" aria-label="Demais valores da leitura atual">
-                        <div>
-                            <span class="metric-label">Volume</span>
-                            <strong id="consumption-metric">—</strong>
-                            <small>Litros informados pelo SM-WU</small>
-                        </div>
-                        <div>
-                            <span class="metric-label">RSSI Wi-Fi</span>
-                            <strong id="rssi-metric">—</strong>
-                            <small>Intensidade de sinal recebida</small>
-                        </div>
-                    </div>
-                </section>
+                    <aside class="reading-meta" aria-label="Detalhes da leitura">
+                        <div><span class="meta-icon"><svg aria-hidden="true"><use href="#icon-clock"></use></svg></span><span><small>Horário da leitura</small><strong id="metric-timestamp">Sem leitura</strong></span></div>
+                        <div><span class="meta-icon"><svg aria-hidden="true"><use href="#icon-device"></use></svg></span><span><small>Dispositivo</small><strong id="device-state-reading">—</strong><em id="device-state-context">Verificando comunicação</em></span></div>
+                        <div><span class="meta-icon"><svg aria-hidden="true"><use href="#icon-signal"></use></svg></span><span><small>Distância medida</small><strong id="flow-metric">—</strong><em id="flow-context">Aguardando leitura</em></span></div>
+                    </aside>
+                </div>
             </section>
 
             <section class="surface chart-panel" id="monitoramento" aria-labelledby="chart-title">
-                <div class="chart-toolbar">
-                    <div>
-                        <p class="eyebrow">Série temporal</p>
-                        <h2 id="chart-title">Histórico de telemetria</h2>
-                    </div>
-                    <div class="range-filters" role="group" aria-label="Período do gráfico">
-                        <button class="range-filter is-active" type="button" data-hours="24" aria-pressed="true">Hoje</button>
-                        <button class="range-filter" type="button" data-hours="168" aria-pressed="false">7 dias</button>
-                        <button class="range-filter" type="button" data-hours="720" aria-pressed="false">30 dias</button>
-                    </div>
-                </div>
+                <div class="chart-toolbar"><div><p class="eyebrow">Série temporal</p><h2 id="chart-title">Comportamento do reservatório</h2><p class="section-description">Acompanhe as variações registradas pelo SM-WU.</p></div><div class="range-filters" role="group" aria-label="Período do gráfico"><button class="range-filter is-active" type="button" data-hours="24" aria-pressed="true">Hoje</button><button class="range-filter" type="button" data-hours="168" aria-pressed="false">7 dias</button><button class="range-filter" type="button" data-hours="720" aria-pressed="false">30 dias</button></div></div>
+                <div class="chart-subtoolbar"><div class="metric-tabs" role="group" aria-label="Métrica exibida no gráfico"><button class="metric-tab is-active" type="button" data-metric="nivel" aria-pressed="true">Nível</button><button class="metric-tab" type="button" data-metric="consumo" aria-pressed="false">Consumo</button></div><span class="chart-legend"><i aria-hidden="true"></i><span id="chart-legend-label">Nível do reservatório</span></span></div>
+                <div class="chart-stage" id="chart-stage"><canvas id="history-chart" aria-label="Gráfico das leituras do SM-WU ao longo do tempo" role="img"></canvas><div class="chart-state" id="chart-state" aria-live="polite"><span class="chart-state-icon" aria-hidden="true"><svg><use href="#icon-activity"></use></svg></span><strong id="chart-state-title">Carregando histórico</strong><span id="chart-state-description">Preparando a visualização das leituras.</span></div></div>
+                <p class="chart-summary" id="chart-summary">O resumo textual aparecerá após o carregamento.</p>
+            </section>
 
-                <div class="metric-tabs" role="group" aria-label="Métrica exibida no gráfico">
-                    <button class="metric-tab is-active" type="button" data-metric="nivel" aria-pressed="true">Nível</button>
-                    <button class="metric-tab" type="button" data-metric="volume" aria-pressed="false">Volume</button>
-                    <button class="metric-tab" type="button" data-metric="distancia" aria-pressed="false">Distância</button>
-                    <button class="metric-tab" type="button" data-metric="rssi_wifi" aria-pressed="false">RSSI Wi-Fi</button>
-                </div>
-
-                <div class="chart-stage" id="chart-stage">
-                    <canvas id="history-chart" aria-label="Gráfico das leituras do SM-WU ao longo do tempo" role="img"></canvas>
-                    <div class="chart-state" id="chart-state" aria-live="polite">
-                        <span class="chart-state-icon" aria-hidden="true">≋</span>
-                        <strong id="chart-state-title">Carregando histórico</strong>
-                        <span id="chart-state-description">Preparando a visualização das leituras.</span>
-                    </div>
-                </div>
-                <p class="chart-summary" id="chart-summary">O resumo textual do gráfico aparecerá após o carregamento.</p>
+            <section class="analytics-grid" aria-label="Consumo e resumo dos dados">
+                <article class="surface consumption-panel">
+                    <div class="section-heading"><div><p class="eyebrow">Uso de água</p><h2>Consumo no período</h2></div><span class="status-badge is-neutral" id="consumption-period-total">—</span></div>
+                    <div class="consumption-chart-stage" id="consumption-chart-stage"><canvas id="consumption-chart" aria-label="Gráfico de consumo calculado pelas reduções de volume" role="img"></canvas><div class="chart-state compact" id="consumption-chart-state" aria-live="polite"><span class="chart-state-icon" aria-hidden="true"><svg><use href="#icon-consumption"></use></svg></span><strong id="consumption-state-title">Aguardando histórico</strong><span id="consumption-state-description">São necessárias ao menos duas leituras de volume.</span></div></div>
+                    <p class="calculation-note">Consumo estimado localmente pela soma das reduções entre leituras consecutivas de volume.</p>
+                </article>
+                <article class="surface insights-panel">
+                    <div class="section-heading"><div><p class="eyebrow">Resumo dos dados</p><h2>Análise do período</h2></div><span class="insight-symbol" aria-hidden="true"><svg><use href="#icon-activity"></use></svg></span></div>
+                    <div class="insights-list" id="insights-list" aria-live="polite"><div class="insight-skeleton"></div><div class="insight-skeleton short"></div><div class="insight-skeleton"></div></div>
+                </article>
             </section>
 
             <div class="lower-grid">
                 <section class="surface alerts-panel" id="alertas" aria-labelledby="alerts-title">
-                    <div class="section-heading">
-                        <div>
-                            <p class="eyebrow">Ocorrências</p>
-                            <h2 id="alerts-title">Alertas ativos</h2>
-                        </div>
-                        <span class="status-badge is-neutral" id="alerts-count">0 ativos</span>
-                    </div>
-                    <div class="alerts-list" id="alerts-list" aria-live="polite" aria-busy="true">
-                        <div class="empty-state loading-state">
-                            <span class="empty-state-icon" aria-hidden="true">…</span>
-                            <strong>Verificando alertas</strong>
-                            <span>Consultando o estado atual do sistema.</span>
-                        </div>
-                    </div>
+                    <div class="section-heading"><div><p class="eyebrow">Ocorrências</p><h2 id="alerts-title">Alertas ativos</h2></div><span class="status-badge is-neutral" id="alerts-count">0 ativos</span></div>
+                    <div class="alerts-list" id="alerts-list" aria-live="polite" aria-busy="true"><div class="empty-state loading-state"><span class="empty-state-icon" aria-hidden="true">…</span><strong>Verificando alertas</strong><span>Consultando o estado atual do sistema.</span></div></div>
                 </section>
 
                 <section class="surface devices-panel" id="dispositivos" aria-labelledby="devices-title">
-                    <div class="section-heading">
-                        <div>
-                            <p class="eyebrow">Infraestrutura conectada</p>
-                            <h2 id="devices-title">Dispositivos</h2>
-                        </div>
-                        <span class="section-note" id="devices-count">—</span>
-                    </div>
+                    <div class="section-heading"><div><p class="eyebrow">Infraestrutura conectada</p><h2 id="devices-title">Dispositivo</h2></div><div class="section-actions"><span class="section-note" id="devices-count">—</span><button class="secondary-button compact-button" id="connect-device-panel" type="button"><svg aria-hidden="true"><use href="#icon-plus"></use></svg>Conectar</button></div></div>
                     <div class="device-card" id="device-card">
-                        <div class="device-main">
-                            <span class="device-symbol" aria-hidden="true">▣</span>
-                            <span>
-                                <strong id="device-name">Aguardando identificação</strong>
-                                <small id="device-type">Medidor de nível ultrassônico SM-WU</small>
-                            </span>
-                        </div>
-                        <div class="device-health">
-                            <span class="status-dot is-waiting" id="device-dot" aria-hidden="true"></span>
-                            <span>
-                                <strong id="device-status">Verificando</strong>
-                                <small id="device-last-seen">Sem comunicação registrada</small>
-                            </span>
-                        </div>
-                        <button class="text-button" id="device-details-button" type="button" aria-expanded="false" aria-controls="device-details" disabled>Ver detalhes</button>
+                        <div class="device-main"><span class="device-symbol" aria-hidden="true"><svg><use href="#icon-device"></use></svg></span><span><strong id="device-name">Aguardando identificação</strong><small id="device-type">Medidor de nível ultrassônico SM-WU</small></span></div>
+                        <span class="device-status-badge is-waiting" id="device-status-badge"><span class="status-dot is-waiting" id="device-dot" aria-hidden="true"></span><strong id="device-status">Verificando</strong></span>
+                        <div class="device-last-contact"><small>Última comunicação</small><strong id="device-last-seen">Sem comunicação registrada</strong></div>
+                        <button class="text-button" id="device-details-button" type="button" aria-expanded="false" aria-controls="device-details" disabled>Ver detalhes <svg aria-hidden="true"><use href="#icon-chevron"></use></svg></button>
                     </div>
-                    <div class="device-details" id="device-details" hidden>
-                        <dl>
-                            <div><dt>Identificador</dt><dd id="detail-device-id">—</dd></div>
-                            <div><dt>Última leitura</dt><dd id="detail-last-reading">—</dd></div>
-                            <div><dt>Nível</dt><dd id="detail-ppl">—</dd></div>
-                            <div><dt>Distância</dt><dd id="detail-vazao">—</dd></div>
-                            <div><dt>Volume</dt><dd id="detail-rssi">—</dd></div>
-                            <div><dt>RSSI Wi-Fi</dt><dd id="detail-wifi">—</dd></div>
-                        </dl>
-                    </div>
+                    <div class="device-details" id="device-details" hidden><dl><div><dt>Identificador</dt><dd id="detail-device-id">—</dd></div><div><dt>Última leitura</dt><dd id="detail-last-reading">—</dd></div><div><dt>Nível</dt><dd id="detail-ppl">—</dd></div><div><dt>Distância</dt><dd id="detail-vazao">—</dd></div><div><dt>Volume</dt><dd id="detail-rssi">—</dd></div><div><dt>RSSI Wi-Fi</dt><dd id="detail-wifi">—</dd></div></dl></div>
+                    <div class="device-management"><button class="text-button" id="rename-reservoir" type="button">Renomear reservatório</button><button class="text-button danger-text" id="unlink-device" type="button">Desvincular dispositivo</button></div>
                 </section>
             </div>
 
             <section class="surface history-panel" id="historico" aria-labelledby="history-title">
-                <div class="section-heading history-heading">
-                    <div>
-                        <p class="eyebrow">Registros recebidos</p>
-                        <h2 id="history-title">Histórico recente</h2>
-                    </div>
-                    <span class="section-note" id="history-count">Aguardando dados</span>
-                </div>
-
+                <div class="section-heading history-heading"><div><p class="eyebrow">Registros recebidos</p><h2 id="history-title">Histórico recente</h2><p class="section-description">Leituras mais recentes dentro do período selecionado.</p></div><span class="section-note" id="history-count">Aguardando dados</span></div>
                 <div class="table-state" id="table-state" aria-live="polite">Carregando registros…</div>
-                <div class="table-wrapper" id="history-table-wrapper" hidden>
-                    <table>
-                        <thead>
-                            <tr>
-                                <th scope="col">Data e hora</th>
-                                <th scope="col">Dispositivo</th>
-                                <th scope="col" class="numeric">Nível</th>
-                                <th scope="col" class="numeric">Distância</th>
-                                <th scope="col" class="numeric">Volume</th>
-                                <th scope="col" class="numeric">RSSI Wi-Fi</th>
-                            </tr>
-                        </thead>
-                        <tbody id="history-table-body"></tbody>
-                    </table>
-                </div>
-                <div class="table-pagination" id="table-pagination" hidden>
-                    <span id="pagination-label">Página 1</span>
-                    <div>
-                        <button class="pagination-button" id="previous-page" type="button" aria-label="Página anterior">Anterior</button>
-                        <button class="pagination-button" id="next-page" type="button" aria-label="Próxima página">Próxima</button>
-                    </div>
-                </div>
+                <div class="table-wrapper" id="history-table-wrapper" hidden><table><thead><tr><th scope="col">Data e hora</th><th scope="col">Dispositivo</th><th scope="col" class="numeric">Nível</th><th scope="col" class="numeric">Distância</th><th scope="col" class="numeric">Volume</th><th scope="col">Status</th></tr></thead><tbody id="history-table-body"></tbody></table></div>
+                <div class="table-pagination" id="table-pagination" hidden><span id="pagination-label">Página 1</span><div><button class="pagination-button" id="previous-page" type="button" aria-label="Página anterior">Anterior</button><button class="pagination-button" id="next-page" type="button" aria-label="Próxima página">Próxima</button></div></div>
             </section>
 
             <section class="settings-row" id="configuracoes" aria-labelledby="settings-title">
-                <div>
-                    <p class="eyebrow">Preferências locais</p>
-                    <h2 id="settings-title">Atualização da tela</h2>
-                    <p>Esta preferência altera apenas a frequência de consulta desta dashboard.</p>
-                </div>
-                <label class="select-field" for="refresh-interval">
-                    <span>Intervalo de atualização</span>
-                    <select id="refresh-interval">
-                        <option value="5000">A cada 5 segundos</option>
-                        <option value="15000">A cada 15 segundos</option>
-                        <option value="30000">A cada 30 segundos</option>
-                    </select>
-                </label>
+                <div><p class="eyebrow">Preferências locais</p><h2 id="settings-title">Atualização da tela</h2><p>Esta preferência altera apenas a frequência de consulta desta dashboard.</p></div>
+                <label class="select-field" for="refresh-interval"><span>Intervalo de atualização</span><select id="refresh-interval"><option value="5000">A cada 5 segundos</option><option value="15000">A cada 15 segundos</option><option value="30000">A cada 30 segundos</option></select></label>
             </section>
+            </div>
         </main>
     </div>
 
-    <noscript>
-        <div class="noscript-message">Ative o JavaScript para acompanhar as leituras do sistema.</div>
-    </noscript>
+    <div class="modal-backdrop" id="pairing-modal" hidden>
+        <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="pairing-title">
+            <button class="icon-button modal-close" type="button" data-close-modal="pairing-modal" aria-label="Fechar"><svg aria-hidden="true"><use href="#icon-close"></use></svg></button>
+            <span class="modal-symbol" aria-hidden="true"><svg><use href="#icon-device"></use></svg></span>
+            <p class="eyebrow">Configuração segura</p><h2 id="pairing-title">Conectar dispositivo</h2>
+            <div class="pairing-step" id="pairing-step-code">
+                <p>Digite o código secreto fornecido com o seu Hidra R3B.</p>
+                <form id="pairing-code-form"><label class="form-field"><span>Código de pareamento</span><input id="pairing-code" name="pairing_code" type="text" maxlength="96" autocomplete="off" spellcheck="false" placeholder="HIDRA-••••-••••-••••-••••" required></label><p class="form-feedback" id="pairing-code-feedback" role="alert"></p><button class="primary-button full-button" type="submit">Validar dispositivo</button></form>
+            </div>
+            <div class="pairing-step" id="pairing-step-confirm" hidden>
+                <div class="pairing-device-preview"><span class="status-dot" id="pairing-device-dot"></span><div><small>Dispositivo encontrado</small><strong id="pairing-device-code">—</strong><span id="pairing-device-status">—</span></div></div>
+                <form id="pairing-confirm-form"><label class="form-field"><span>Nome do reservatório</span><input id="pairing-reservoir-name" name="reservoir_name" type="text" maxlength="60" placeholder="Ex.: Reservatório principal" required></label><p class="form-feedback" id="pairing-confirm-feedback" role="alert"></p><div class="modal-actions"><button class="secondary-button" id="pairing-back" type="button">Voltar</button><button class="primary-button" type="submit">Conectar e abrir</button></div></form>
+            </div>
+        </section>
+    </div>
+
+    <div class="modal-backdrop" id="account-modal" hidden>
+        <section class="modal-card account-modal-card" role="dialog" aria-modal="true" aria-labelledby="account-title">
+            <button class="icon-button modal-close" type="button" data-close-modal="account-modal" aria-label="Fechar"><svg aria-hidden="true"><use href="#icon-close"></use></svg></button>
+            <span class="account-avatar large" aria-hidden="true"><?= $escape(strtoupper($initial)) ?></span>
+            <p class="eyebrow">Perfil da conta</p><h2 id="account-title"><?= $escape($currentUser['name']) ?></h2>
+            <dl class="account-details"><div><dt>E-mail</dt><dd><?= $escape($currentUser['email']) ?></dd></div><div><dt>Segurança</dt><dd>Sessão protegida e isolada por usuário</dd></div></dl>
+        </section>
+    </div>
+
+    <div class="modal-backdrop" id="management-modal" hidden>
+        <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="management-title">
+            <button class="icon-button modal-close" type="button" data-close-modal="management-modal" aria-label="Fechar"><svg aria-hidden="true"><use href="#icon-close"></use></svg></button>
+            <p class="eyebrow" id="management-eyebrow">Reservatório</p><h2 id="management-title">Gerenciar reservatório</h2><p class="auth-subtitle" id="management-description"></p>
+            <form id="rename-form" hidden><label class="form-field"><span>Novo nome</span><input id="rename-input" type="text" maxlength="60" required></label><p class="form-feedback" id="rename-feedback" role="alert"></p><div class="modal-actions"><button class="secondary-button" type="button" data-close-modal="management-modal">Cancelar</button><button class="primary-button" type="submit">Salvar nome</button></div></form>
+            <form id="unlink-form" hidden><div class="warning-callout"><strong>O histórico não será apagado</strong><p>A associação será encerrada e será necessário gerar um novo código para conectar este equipamento novamente.</p></div><p class="form-feedback" id="unlink-feedback" role="alert"></p><div class="modal-actions"><button class="secondary-button" type="button" data-close-modal="management-modal">Cancelar</button><button class="critical-button" type="submit">Confirmar desvinculação</button></div></form>
+        </section>
+    </div>
+
+    <div class="toast-region" id="toast-region" aria-live="polite" aria-atomic="true"></div>
+
+    <noscript><div class="noscript-message">Ative o JavaScript para acompanhar as leituras do sistema.</div></noscript>
 </body>
 </html>

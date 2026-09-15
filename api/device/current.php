@@ -6,27 +6,25 @@ require_once __DIR__ . '/_bootstrap.php';
 
 api_run(static function (): void {
     api_require_get();
-
-    $id = api_id();
+    $user = auth_require_user();
+    $reservoirId = api_reservoir_id();
     $repository = api_repository();
-    $current = $repository->current($id);
+    $reservoir = auth_reservoir_repository()->findOwned($reservoirId, $user['id']);
+    if ($reservoir === null) {
+        throw new R3B\Http\HttpException(404, 'RESERVOIR_NOT_FOUND', 'Reservatório não encontrado.');
+    }
+    $current = $repository->currentForReservoir($reservoirId, $user['id']);
     if ($current === null) {
-        if ($id !== null && $repository->status($id) === null) {
-            throw new R3B\Http\HttpException(
-                404,
-                'DEVICE_NOT_FOUND',
-                'Dispositivo nao encontrado.'
-            );
-        }
         throw new R3B\Http\HttpException(
             404,
             'NO_DATA',
-            'Nenhuma leitura de telemetria foi recebida para o dispositivo.'
+            'Nenhuma leitura de telemetria foi recebida para este reservatório.'
         );
     }
 
     api_json([
         'success' => true,
+        'reservoir' => $reservoir,
         'device' => $current['device'],
         'data' => $current['data'],
     ]);

@@ -6,12 +6,12 @@ require_once __DIR__ . '/_bootstrap.php';
 
 api_run(static function (): void {
     api_require_get();
-
-    $id = api_id();
+    $user = auth_require_user();
+    $reservoirId = api_reservoir_id();
     $repository = api_repository();
-    $device = $repository->status($id);
-    if ($id !== null && $device === null) {
-        throw new R3B\Http\HttpException(404, 'DEVICE_NOT_FOUND', 'Dispositivo nao encontrado.');
+    $device = $repository->statusForReservoir($reservoirId, $user['id']);
+    if ($device === null) {
+        throw new R3B\Http\HttpException(404, 'RESERVOIR_NOT_FOUND', 'Reservatório não encontrado.');
     }
     $alerts = [];
 
@@ -24,7 +24,7 @@ api_run(static function (): void {
         ];
     }
 
-    $current = $repository->current($id);
+    $current = $repository->currentForReservoir($reservoirId, $user['id']);
     if ($current !== null) {
         $level = $current['data']['nivel'];
         if ($level < 20) {
@@ -46,6 +46,7 @@ api_run(static function (): void {
 
     api_json([
         'success' => true,
+        'reservoir_id' => $reservoirId,
         'count' => count($alerts),
         'data' => $alerts,
     ]);

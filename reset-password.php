@@ -1,0 +1,14 @@
+<?php
+
+declare(strict_types=1);
+
+require_once __DIR__ . '/config/bootstrap.php';
+require_once APP_ROOT . '/config/database.php';
+require_once APP_ROOT . '/includes/auth.php';
+if (auth_current_user() !== null) { header('Location: /', true, 302); exit; }
+web_security_headers();
+$token = isset($_GET['token']) && is_string($_GET['token']) ? substr($_GET['token'], 0, 128) : '';
+$escape = static fn (string $value): string => htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+?>
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0b2638"><meta name="csrf-token" content="<?= $escape(auth_csrf_token()) ?>"><title>Redefinir senha — Hidra R3B</title><link rel="stylesheet" href="/static/css/auth.css"><script defer src="/static/js/auth.js"></script></head>
+<body><main class="auth-layout"><section class="auth-brand-panel"><a class="auth-brand" href="/" aria-label="Hidra R3B"><span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2S5.5 9 5.5 14.5a6.5 6.5 0 0 0 13 0C18.5 9 12 2 12 2Z"/></svg></span><strong>Hidra <b>R3B</b></strong></a><div><p class="eyebrow">Nova credencial</p><h1>Proteja sua conta.</h1><p>Depois da redefinição, sessões anteriores serão encerradas automaticamente.</p></div></section><section class="auth-form-panel"><div class="auth-card"><div class="mobile-brand">Hidra <b>R3B</b></div><a class="back-link" href="/login">← Voltar para o login</a><p class="eyebrow">Segurança da conta</p><h2>Crie uma nova senha</h2><p class="auth-subtitle" id="token-status">Validando o link seguro…</p><form class="auth-form" id="reset-form" data-endpoint="/api/auth/reset-password.php" data-success="redirect" hidden><input type="hidden" name="token" value="<?= $escape($token) ?>"><label><span>Nova senha</span><input name="password" type="password" minlength="10" maxlength="128" autocomplete="new-password" aria-describedby="new-password-hint" required><small id="new-password-hint">Mínimo de 10 caracteres, com letras e números.</small></label><label><span>Confirmar nova senha</span><input name="password_confirmation" type="password" minlength="10" maxlength="128" autocomplete="new-password" required></label><p class="form-error" data-form-error role="alert"></p><button class="auth-submit" type="submit"><span>Redefinir senha</span><span class="button-loader" aria-hidden="true"></span></button></form><div class="invalid-token" id="invalid-token" hidden><strong>Este link não está mais disponível</strong><p>Ele pode ter expirado ou já ter sido utilizado.</p><a class="auth-submit link-button" href="/esqueci-senha">Solicitar novo link</a></div></div><p class="auth-footer">O link de recuperação pode ser usado uma única vez.</p></section></main></body></html>

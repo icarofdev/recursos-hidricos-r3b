@@ -70,8 +70,55 @@ function api_require_post(): void
     }
 }
 
+/** @return array<string,mixed> */
+function api_json_body(int $maximumBytes = 16384): array
+{
+    $contentType = strtolower(trim(explode(';', (string) ($_SERVER['CONTENT_TYPE'] ?? ''))[0]));
+    if ($contentType !== 'application/json') {
+        throw new HttpException(415, 'UNSUPPORTED_MEDIA_TYPE', 'Envie os dados como application/json.');
+    }
+    $contentLength = $_SERVER['CONTENT_LENGTH'] ?? null;
+    if (is_string($contentLength) && ctype_digit($contentLength) && (int) $contentLength > $maximumBytes) {
+        throw new HttpException(413, 'PAYLOAD_TOO_LARGE', 'Conteúdo maior que o limite permitido.');
+    }
+    $raw = file_get_contents('php://input', false, null, 0, $maximumBytes + 1);
+    if ($raw === false || strlen($raw) > $maximumBytes) {
+        throw new HttpException(413, 'PAYLOAD_TOO_LARGE', 'Conteúdo maior que o limite permitido.');
+    }
+    try {
+        $decoded = json_decode($raw, true, 16, JSON_THROW_ON_ERROR);
+    } catch (JsonException) {
+        throw new HttpException(400, 'INVALID_JSON', 'O corpo da solicitação não contém JSON válido.');
+    }
+    if (!is_array($decoded) || array_is_list($decoded)) {
+        throw new HttpException(400, 'INVALID_JSON', 'O corpo JSON deve ser um objeto.');
+    }
+    return $decoded;
+}
+
+/** @param array<string,mixed> $data */
+function api_reject_unknown_fields(array $data, array $allowed): void
+{
+    $unknown = array_diff(array_keys($data), $allowed);
+    if ($unknown !== []) {
+        throw new HttpException(422, 'UNKNOWN_FIELD', 'A solicitação contém campos não reconhecidos.');
+    }
+}
+
+function api_required_string(array $data, string $field, int $maximum): string
+{
+    $value = $data[$field] ?? null;
+    if (!is_string($value) || strlen($value) > $maximum) {
+        throw new HttpException(422, 'INVALID_FIELD', sprintf('O campo %s é inválido.', $field));
+    }
+    return $value;
+}
+
 function api_request_uses_https(): bool
 {
+    if (function_exists('request_is_https')) {
+        return request_is_https();
+    }
     $https = strtolower(trim((string) ($_SERVER['HTTPS'] ?? '')));
     if ($https === 'on' || $https === '1') {
         return true;
@@ -91,6 +138,28 @@ function api_request_uses_https(): bool
     }
 
     return false;
+}
+
+function api_reservoir_id(): int
+{
+    $value = $_GET['reservoir_id'] ?? null;
+    if (!is_string($value) || !preg_match('/^[1-9][0-9]*$/', $value)) {
+        throw new HttpException(422, 'INVALID_RESERVOIR_ID', 'reservoir_id deve ser um inteiro positivo.');
+    }
+    $id = filter_var($value, FILTER_VALIDATE_INT);
+    if ($id === false || $id <= 0) {
+        throw new HttpException(422, 'INVALID_RESERVOIR_ID', 'reservoir_id deve ser um inteiro positivo.');
+    }
+    return (int) $id;
+}
+
+function api_enforce_rate_limit(string $scope, string $identifier, int $limit, int $windowSeconds): void
+{
+    $retryAfter = auth_rate_limiter()->consume($scope, $identifier, $limit, $windowSeconds);
+    if ($retryAfter > 0) {
+        header('Retry-After: ' . $retryAfter);
+        throw new HttpException(429, 'RATE_LIMIT_EXCEEDED', 'Muitas tentativas. Aguarde e tente novamente.');
+    }
 }
 
 function api_extract_device_token(): ?string

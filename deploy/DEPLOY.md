@@ -107,7 +107,15 @@ mysql -u recursos_user -p'SUA_SENHA_FORTE_DO_BANCO' -h 127.0.0.1 recursos_hidric
 
 # Configurar ambiente
 cp .env.example .env
-nano .env   # Ajuste DB_PASSWORD, DEVICE_TOKEN_SECRET, etc.
+nano .env   # Ajuste DB_PASSWORD, APP_KEY, DEVICE_TOKEN_SECRET e Brevo
+
+# Sessões PHP fora do DocumentRoot (o mesmo caminho de SESSION_SAVE_PATH no .env)
+mkdir -p /var/lib/hidra-r3b/sessions
+chown www-data:www-data /var/lib/hidra-r3b/sessions
+chmod 700 /var/lib/hidra-r3b/sessions
+
+# Aplicar somente as adições ainda pendentes no banco
+php scripts/migrate.php
 
 # Permissões seguras
 chown -R www-data:www-data /var/www/recursos-hidricos-r3b
@@ -137,6 +145,8 @@ cp deploy/vps.env.example deploy/vps.env
   ```
 
 *(O script nunca sobrescreve o `.env` da VPS, ajusta permissões e recarrega os serviços automaticamente).*
+
+O deploy executa `scripts/migrate.php` antes de recarregar o PHP-FPM. A migração é aditiva e idempotente; se falhar, o reload é interrompido. Antes do primeiro deploy multiusuário, configure também `APP_URL`, `APP_KEY`, `SESSION_SAVE_PATH`, `BREVO_API_KEY`, `BREVO_SENDER_EMAIL` e `BREVO_SENDER_NAME`.
 
 ---
 
@@ -209,4 +219,4 @@ curl -X POST "http://IP_DA_VPS/api/device/ingest.php?token=SEU_TOKEN" \
 ```
 
 3. **Verificar Leitura no Dashboard**:
-Abra `https://seudominio.com.br` no navegador e confirme a atualização em tempo real.
+Gere o código de pareamento do equipamento real com `php scripts/provision-device.php 1 1440`. Abra `https://seudominio.com.br`, crie uma conta, conecte o código e confirme a atualização em tempo real. A chave Brevo e o remetente precisam estar ativos para testar “Esqueci minha senha”.

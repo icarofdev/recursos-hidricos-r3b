@@ -324,6 +324,9 @@ if [ -f '${RemoteDir}/.env' ]; then
 fi
 chmod +x '${RemoteDir}'/scripts/*.sh 2>/dev/null || true
 
+# Migração incremental: falha o deploy antes do reload se o schema não puder ser atualizado.
+php '${RemoteDir}/scripts/migrate.php'
+
 echo "[$DeployTimestamp] Deploy executado com sucesso. Commit: $CurrentCommit" >> '${RemoteDir}/deploy.log'
 "@
 
