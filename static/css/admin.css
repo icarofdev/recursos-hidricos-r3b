@@ -1,0 +1,223 @@
+@import "theme.css";
+
+.admin-shell {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--color-background);
+    color: var(--color-text);
+    font-family: inherit;
+    transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.admin-topbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1rem 2rem;
+    background-color: var(--color-sidebar);
+    border-bottom: 1px solid var(--color-border);
+    color: #ffffff;
+}
+
+.admin-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.badge-admin {
+    display: inline-block;
+    background: var(--color-primary);
+    color: #ffffff;
+    font-size: 0.7rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 4px;
+    font-weight: 600;
+    margin-left: 0.5rem;
+    text-transform: uppercase;
+}
+
+.admin-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.admin-container {
+    max-width: 1200px;
+    margin: 2rem auto;
+    padding: 0 1.5rem;
+    width: 100%;
+}
+
+.admin-title {
+    font-size: 1.75rem;
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    color: var(--color-text);
+}
+
+.admin-card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 2rem;
+    box-shadow: var(--shadow-sm);
+}
+
+.card-title {
+    font-size: 1.25rem;
+    font-weight: 600;
+    margin-bottom: 1rem;
+    color: var(--color-text);
+}
+
+.admin-form-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.admin-card input,
+.admin-card select {
+    background: var(--color-input-bg);
+    border: 1px solid var(--color-input-border);
+    color: var(--color-input-text);
+}
+
+.form-actions-full {
+    grid-column: 1 / -1;
+    display: flex;
+    justify-content: flex-end;
+}
+
+.admin-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 1rem;
+}
+
+.admin-table th, .admin-table td {
+    padding: 0.75rem 1rem;
+    text-align: left;
+    border-bottom: 1px solid var(--color-border);
+    font-size: 0.9rem;
+}
+
+.admin-table th {
+    background-color: var(--color-surface-subtle);
+    color: var(--color-text-secondary);
+    font-weight: 600;
+}
+
+.admin-table tr:hover {
+    background-color: var(--color-surface-strong);
+}
+
+.action-buttons {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.btn-sm {
+    padding: 0.35rem 0.65rem;
+    font-size: 0.8rem;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    border: none;
+    transition: background-color 0.2s;
+}
+
+.btn-generate {
+    background-color: #087ea4;
+    color: #ffffff;
+}
+
+.btn-generate:hover {
+    background-color: #0aa2d2;
+}
+
+.btn-revoke {
+    background-color: #a82e2e;
+    color: #ffffff;
+}
+
+.btn-revoke:hover {
+    background-color: #c93b3b;
+}
+
+.btn-transfer {
+    background-color: #d97706;
+    color: #ffffff;
+}
+
+.btn-transfer:hover {
+    background-color: #f59e0b;
+}
+
+.activation-code-box {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--color-surface-subtle);
+    border: 2px dashed var(--color-primary);
+    border-radius: 8px;
+    padding: 1rem 1.5rem;
+    margin: 1.5rem 0;
+}
+
+.activation-code-box code {
+    font-size: 1.4rem;
+    font-weight: 700;
+    letter-spacing: 2px;
+    color: var(--color-water);
+    font-family: monospace;
+}
+
+.code-expires-text {
+    font-size: 0.85rem;
+    color: var(--color-text-muted);
+    text-align: center;
+}
+
+.admin-error-screen {
+    text-align: center;
+    padding: 5rem 2rem;
+}
+
+.admin-error-screen h2 {
+    font-size: 2rem;
+    margin-bottom: 1rem;
+    color: var(--color-critical);
+}
+
+.table-empty {
+    text-align: center;
+    color: var(--color-text-muted);
+    padding: 2rem;
+}
+
+.badge-model {
+    display: inline-block;
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+
+.badge-smwu {
+    background-color: var(--color-water-soft);
+    color: var(--color-water);
+    border: 1px solid var(--color-water);
+}
+
+.badge-smwa {
+    background-color: var(--color-success-soft);
+    color: var(--color-success);
+    border: 1px solid var(--color-success);
+}

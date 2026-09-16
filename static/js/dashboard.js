@@ -26,20 +26,28 @@ const dashboardState = {
     pairingCode: null
 };
 
+const API_BASE = window.__API_BASE__ || document.querySelector('meta[name="api-base"]')?.content || '';
+function apiUrl(endpoint) {
+    if (!API_BASE || endpoint.startsWith('http://') || endpoint.startsWith('https://')) return endpoint;
+    return `${API_BASE.replace(/\/+$/, '')}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+}
+
 const API_ENDPOINTS = {
-    current: '/api/device/current.php',
-    history: '/api/device/history.php',
-    status: '/api/device/status.php',
-    alerts: '/api/device/alerts.php',
-    reservoirs: '/api/reservoirs/index.php',
-    rename: '/api/reservoirs/rename.php',
-    validatePairing: '/api/devices/validate-pairing.php',
-    connect: '/api/devices/connect.php',
-    unlink: '/api/devices/unlink.php',
-    logout: '/api/auth/logout.php'
+    current: '/api/device/current',
+    history: '/api/device/history',
+    status: '/api/device/status',
+    alerts: '/api/device/alerts',
+    snapshot: '/api/device/snapshot',
+    reservoirs: '/api/reservoirs',
+    rename: '/api/reservoirs/rename',
+    validatePairing: '/api/devices/validate-pairing',
+    connect: '/api/devices/connect',
+    unlink: '/api/devices/unlink',
+    logout: '/api/auth/logout'
 };
 
-const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
+let CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
+if (CSRF_TOKEN === '{{csrf}}') CSRF_TOKEN = '';
 
 const REQUEST_TIMEOUT_MILLISECONDS = 8000;
 const HISTORY_REFRESH_MILLISECONDS = 30000;
@@ -458,12 +466,39 @@ function renderLatest() {
         return;
     }
 
-    const nivel = toFiniteNumber(latest.nivel);
+    const isSMWA = getSelectedReservoir()?.device?.type === 'SM-WA';
+    const vazao = toFiniteNumber(latest.vazao);
+    const consumo = toFiniteNumber(latest.consumo_acumulado);
     const volume = toFiniteNumber(latest.volume);
-    const distancia = toFiniteNumber(latest.distancia);
     const rssi = toFiniteNumber(latest.rssi_wifi);
-    const status = getLevelStatus(nivel);
     const sensorId = getMonitoredDeviceId();
+
+    if (isSMWA) {
+        document.documentElement.style.setProperty('--water-level', '50%');
+        signalVisual.setAttribute('aria-label', vazao === null
+            ? 'Medidor de água SM-WA sem valor válido'
+            : `Vazão do hidrômetro: ${formatNumber(vazao, 2)} m³/h.`);
+        signalFill.className = 'tank-water is-good';
+        levelTrackFill.className = 'is-good';
+        statusBadge.className = 'status-badge is-good';
+        statusBadge.textContent = 'Hidrômetro';
+        getElement('consumption-reading').textContent = vazao === null ? '—' : `${formatNumber(vazao, 2)} m³/h`;
+        getElement('telemetry-classification').textContent = vazao === null
+            ? 'Vazão não informada na última leitura'
+            : 'Fluxo instantâneo reportado pelo SM-WA';
+        getElement('flow-reading').textContent = consumo === null ? 'Não informado' : `${formatNumber(consumo, 2)} m³`;
+        getElement('wifi-reading').textContent = volume === null ? 'Não informado' : `${formatNumber(volume, 2)} L`;
+        getElement('rssi-metric').textContent = rssi === null ? 'Não informado' : `${formatNumber(rssi)} dBm`;
+        getElement('monitored-device').textContent = sensorId
+            ? `${getSelectedReservoir()?.name || 'Medidor'} · ${getSelectedReservoir()?.device?.code || `ID ${sensorId}`}`
+            : 'Dispositivo sem identificação';
+        getElement('metric-timestamp').textContent = formatDateTime(latest.timestamp, true);
+        return;
+    }
+
+    const nivel = toFiniteNumber(latest.nivel);
+    const distancia = toFiniteNumber(latest.distancia);
+    const status = getLevelStatus(nivel);
     const waterLevel = nivel === null ? 0 : clamp(nivel, 0, 100);
 
     document.documentElement.style.setProperty('--water-level', `${waterLevel}%`);
@@ -490,47 +525,90 @@ function renderLatest() {
 function renderMetrics() {
     const latest = dashboardState.latest;
     const device = dashboardState.device;
-    const level = toFiniteNumber(latest?.nivel);
-    const volume = toFiniteNumber(latest?.volume);
-    const distance = toFiniteNumber(latest?.distancia);
-    const levelStatus = getLevelStatus(level);
-    const trend = getLevelTrend();
-    const todayHistory = getTodayHistory();
-    const todayConsumption = getConsumptionSeries(todayHistory);
-    const lastSeen = parseDate(getDeviceLastSeen());
-    const capacity = toFiniteNumber(getSelectedReservoir()?.capacity_liters);
+    const isSMWA = getSelectedReservoir()?.device?.type === 'SM-WA';
 
-    getElement('ppl-reading').textContent = level === null ? '—' : formatNumber(level, 2);
-    getElement('ppl-unit').textContent = level === null ? '' : '%';
-    getElement('ppl-context').textContent = trend
-        ? trend.direction === 'stable'
-            ? 'Estável no período selecionado'
-            : `${trend.change > 0 ? 'Alta' : 'Queda'} de ${formatNumber(Math.abs(trend.change), 1)} p.p. no período`
-        : latest ? 'Histórico insuficiente para tendência' : 'Aguardando leitura';
+    if (isSMWA) {
+        const vazao = toFiniteNumber(latest?.vazao);
+        const consumo = toFiniteNumber(latest?.consumo_acumulado);
+        const volume = toFiniteNumber(latest?.volume);
 
-    getElement('consumption-metric').textContent = volume === null ? '—' : formatNumber(volume, 2);
-    getElement('volume-unit').textContent = volume === null ? '' : 'L';
-    getElement('volume-context').textContent = capacity === null
-        ? 'Capacidade total não informada'
-        : `Capacidade: ${formatNumber(capacity, 2)} L`;
-    getElement('capacity-reading').textContent = capacity === null ? 'Não informada' : `${formatNumber(capacity, 2)} L`;
+        const label1 = document.querySelector('#ppl-reading')?.closest('.metric-card')?.querySelector('.metric-label');
+        if (label1) label1.textContent = 'Vazão atual';
+        getElement('ppl-reading').textContent = vazao === null ? '—' : formatNumber(vazao, 2);
+        getElement('ppl-unit').textContent = vazao === null ? '' : 'm³/h';
+        getElement('ppl-context').textContent = vazao === null ? 'Aguardando leitura' : 'Fluxo instantâneo medido pelo SM-WA';
 
-    getElement('daily-consumption-reading').textContent = todayConsumption.available
-        ? formatNumber(todayConsumption.total, 2)
-        : '—';
-    getElement('daily-consumption-unit').textContent = todayConsumption.available ? 'L' : '';
-    getElement('daily-consumption-context').textContent = todayConsumption.available
-        ? `${todayConsumption.intervals} ${todayConsumption.intervals === 1 ? 'intervalo analisado' : 'intervalos analisados'}`
-        : 'São necessárias duas leituras de hoje';
+        const label2 = document.querySelector('#consumption-metric')?.closest('.metric-card')?.querySelector('.metric-label');
+        if (label2) label2.textContent = 'Consumo acumulado';
+        getElement('consumption-metric').textContent = consumo === null ? '—' : formatNumber(consumo, 2);
+        getElement('volume-unit').textContent = consumo === null ? '' : 'm³';
+        getElement('volume-context').textContent = 'Total acumulado no hidrômetro';
 
-    getElement('level-state-reading').textContent = levelStatus.shortLabel;
-    getElement('level-state-reading').className = `metric-status ${levelStatus.className}`;
-    getElement('level-state-context').textContent = level === null
-        ? 'Aguardando telemetria'
-        : level < 40 ? 'Requer acompanhamento' : 'Dentro da faixa normal';
+        const label3 = document.querySelector('#daily-consumption-reading')?.closest('.metric-card')?.querySelector('.metric-label');
+        if (label3) label3.textContent = 'Volume';
+        getElement('daily-consumption-reading').textContent = volume === null ? '—' : formatNumber(volume, 2);
+        getElement('daily-consumption-unit').textContent = volume === null ? '' : 'L';
+        getElement('daily-consumption-context').textContent = 'Estimativa de volume';
 
-    getElement('flow-metric').textContent = distance === null ? '—' : `${formatNumber(distance, 2)} cm`;
-    getElement('flow-context').textContent = distance === null ? 'Valor não informado' : 'Distância reportada pelo SM-WU';
+        const label4 = document.querySelector('#level-state-reading')?.closest('.metric-card')?.querySelector('.metric-label');
+        if (label4) label4.textContent = 'Estado do medidor';
+        getElement('level-state-reading').textContent = device?.status === 'online' ? 'Operando' : 'Offline';
+        getElement('level-state-reading').className = `metric-status ${device?.status === 'online' ? 'is-good' : 'is-critical'}`;
+        getElement('level-state-context').textContent = device?.status === 'online' ? 'Comunicação regular SM-WA' : 'Sem sinal recente';
+
+        getElement('flow-metric').textContent = vazao === null ? '—' : `${formatNumber(vazao, 2)} m³/h`;
+        getElement('flow-context').textContent = 'Vazão reportada pelo SM-WA';
+    } else {
+        const label1 = document.querySelector('#ppl-reading')?.closest('.metric-card')?.querySelector('.metric-label');
+        if (label1) label1.textContent = 'Nível atual';
+        const label2 = document.querySelector('#consumption-metric')?.closest('.metric-card')?.querySelector('.metric-label');
+        if (label2) label2.textContent = 'Volume atual';
+        const label3 = document.querySelector('#daily-consumption-reading')?.closest('.metric-card')?.querySelector('.metric-label');
+        if (label3) label3.textContent = 'Consumo hoje';
+        const label4 = document.querySelector('#level-state-reading')?.closest('.metric-card')?.querySelector('.metric-label');
+        if (label4) label4.textContent = 'Estado do reservatório';
+
+        const level = toFiniteNumber(latest?.nivel);
+        const volume = toFiniteNumber(latest?.volume);
+        const distance = toFiniteNumber(latest?.distancia);
+        const levelStatus = getLevelStatus(level);
+        const trend = getLevelTrend();
+        const todayHistory = getTodayHistory();
+        const todayConsumption = getConsumptionSeries(todayHistory);
+        const capacity = toFiniteNumber(getSelectedReservoir()?.capacity_liters);
+
+        getElement('ppl-reading').textContent = level === null ? '—' : formatNumber(level, 2);
+        getElement('ppl-unit').textContent = level === null ? '' : '%';
+        getElement('ppl-context').textContent = trend
+            ? trend.direction === 'stable'
+                ? 'Estável no período selecionado'
+                : `${trend.change > 0 ? 'Alta' : 'Queda'} de ${formatNumber(Math.abs(trend.change), 1)} p.p. no período`
+            : latest ? 'Histórico insuficiente para tendência' : 'Aguardando leitura';
+
+        getElement('consumption-metric').textContent = volume === null ? '—' : formatNumber(volume, 2);
+        getElement('volume-unit').textContent = volume === null ? '' : 'L';
+        getElement('volume-context').textContent = capacity === null
+            ? 'Capacidade total não informada'
+            : `Capacidade: ${formatNumber(capacity, 2)} L`;
+        getElement('capacity-reading').textContent = capacity === null ? 'Não informada' : `${formatNumber(capacity, 2)} L`;
+
+        getElement('daily-consumption-reading').textContent = todayConsumption.available
+            ? formatNumber(todayConsumption.total, 2)
+            : '—';
+        getElement('daily-consumption-unit').textContent = todayConsumption.available ? 'L' : '';
+        getElement('daily-consumption-context').textContent = todayConsumption.available
+            ? `${todayConsumption.intervals} ${todayConsumption.intervals === 1 ? 'intervalo analisado' : 'intervalos analisados'}`
+            : 'São necessárias duas leituras de hoje';
+
+        getElement('level-state-reading').textContent = levelStatus.shortLabel;
+        getElement('level-state-reading').className = `metric-status ${levelStatus.className}`;
+        getElement('level-state-context').textContent = level === null
+            ? 'Aguardando telemetria'
+            : level < 40 ? 'Requer acompanhamento' : 'Dentro da faixa normal';
+
+        getElement('flow-metric').textContent = distance === null ? '—' : `${formatNumber(distance, 2)} cm`;
+        getElement('flow-context').textContent = distance === null ? 'Valor não informado' : 'Distância reportada pelo SM-WU';
+    }
 
     if (dashboardState.statusError) {
         getElement('device-state-reading').textContent = 'Indisponível';
@@ -557,7 +635,17 @@ function hideChartState(stageId) {
     getElement(stageId).classList.remove('has-state');
 }
 
+function getChartColors() {
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    return {
+        grid: isDark ? 'rgba(255, 255, 255, 0.08)' : '#e6eef1',
+        tick: isDark ? '#8ea3b0' : '#788b95',
+        tooltipBg: isDark ? '#05141f' : '#0b2638'
+    };
+}
+
 function baseChartOptions() {
+    const colors = getChartColors();
     return {
         responsive: true,
         maintainAspectRatio: false,
@@ -567,7 +655,7 @@ function baseChartOptions() {
             legend: { display: false },
             tooltip: {
                 displayColors: false,
-                backgroundColor: '#0b2638',
+                backgroundColor: colors.tooltipBg,
                 titleColor: '#ffffff',
                 bodyColor: '#d9e7ed',
                 padding: 12,
@@ -580,13 +668,13 @@ function baseChartOptions() {
             x: {
                 border: { display: false },
                 grid: { display: false },
-                ticks: { color: '#788b95', maxTicksLimit: 8, maxRotation: 0, autoSkip: true, font: { size: 10 } }
+                ticks: { color: colors.tick, maxTicksLimit: 8, maxRotation: 0, autoSkip: true, font: { size: 10 } }
             },
             y: {
                 beginAtZero: true,
                 border: { display: false },
-                grid: { color: '#e6eef1', drawTicks: false },
-                ticks: { color: '#788b95', padding: 9, maxTicksLimit: 5, font: { size: 10 } }
+                grid: { color: colors.grid, drawTicks: false },
+                ticks: { color: colors.tick, padding: 9, maxTicksLimit: 5, font: { size: 10 } }
             }
         }
     };
@@ -672,6 +760,18 @@ function initializeCharts() {
             }]
         },
         options: consumptionOptions
+    });
+
+    window.addEventListener('hidra-theme-change', () => {
+        const colors = getChartColors();
+        [historyChart, consumptionChart].forEach(chart => {
+            if (!chart) return;
+            chart.options.scales.x.ticks.color = colors.tick;
+            chart.options.scales.y.ticks.color = colors.tick;
+            chart.options.scales.y.grid.color = colors.grid;
+            chart.options.plugins.tooltip.backgroundColor = colors.tooltipBg;
+            chart.update('none');
+        });
     });
 }
 
@@ -955,12 +1055,23 @@ function renderDevice() {
     getElement('device-last-seen').textContent = lastSeen ? `${formatDateTime(lastSeen, true)} · ${formatElapsed(lastSeen)}` : 'Sem comunicação registrada';
     setStatusDot(getElement('device-dot'), dashboardState.statusError || disconnected ? 'is-error' : device ? '' : 'is-waiting');
     statusBadge.className = `device-status-badge ${dashboardState.statusError || disconnected ? 'is-waiting' : ''}`.trim();
+    const isSMWA = reservoir?.device?.type === 'SM-WA';
+    const typeLabel = isSMWA ? 'Medidor de água / hidrômetro SM-WA' : 'Medidor de nível ultrassônico SM-WU';
+    const deviceTypeEl = getElement('device-type');
+    if (deviceTypeEl) deviceTypeEl.textContent = typeLabel;
+
     detailsButton.disabled = false;
     getElement('detail-device-id').textContent = reservoir?.device?.code || String(sensorId);
     getElement('detail-last-reading').textContent = latest ? formatDateTime(latest.timestamp, true) : 'Sem leitura atual';
-    getElement('detail-ppl').textContent = toFiniteNumber(latest?.nivel) === null ? 'Não informado' : `${formatNumber(latest.nivel, 2)}%`;
-    getElement('detail-vazao').textContent = toFiniteNumber(latest?.distancia) === null ? 'Não informada' : `${formatNumber(latest.distancia, 2)} cm`;
-    getElement('detail-rssi').textContent = toFiniteNumber(latest?.volume) === null ? 'Não informado' : `${formatNumber(latest.volume, 2)} L`;
+    if (isSMWA) {
+        getElement('detail-ppl').textContent = toFiniteNumber(latest?.vazao) === null ? 'Não informada' : `${formatNumber(latest.vazao, 2)} m³/h`;
+        getElement('detail-vazao').textContent = toFiniteNumber(latest?.consumo_acumulado) === null ? 'Não informado' : `${formatNumber(latest.consumo_acumulado, 2)} m³`;
+        getElement('detail-rssi').textContent = toFiniteNumber(latest?.volume) === null ? 'Não informado' : `${formatNumber(latest.volume, 2)} L`;
+    } else {
+        getElement('detail-ppl').textContent = toFiniteNumber(latest?.nivel) === null ? 'Não informado' : `${formatNumber(latest.nivel, 2)}%`;
+        getElement('detail-vazao').textContent = toFiniteNumber(latest?.distancia) === null ? 'Não informada' : `${formatNumber(latest.distancia, 2)} cm`;
+        getElement('detail-rssi').textContent = toFiniteNumber(latest?.volume) === null ? 'Não informado' : `${formatNumber(latest.volume, 2)} L`;
+    }
     getElement('detail-wifi').textContent = toFiniteNumber(latest?.rssi_wifi) === null ? 'Não informado' : `${formatNumber(latest.rssi_wifi)} dBm`;
 }
 
@@ -993,9 +1104,35 @@ function renderHistoryTable() {
     const start = (dashboardState.currentPage - 1) * dashboardState.pageSize;
     const pageItems = ordered.slice(start, start + dashboardState.pageSize);
 
+    const isSMWA = getSelectedReservoir()?.device?.type === 'SM-WA';
+    const ths = document.querySelectorAll('#history-table-wrapper th');
+    if (ths.length >= 6) {
+        if (isSMWA) {
+            ths[2].textContent = 'Vazão';
+            ths[3].textContent = 'Consumo Acumulado';
+            ths[4].textContent = 'Volume';
+        } else {
+            ths[2].textContent = 'Nível';
+            ths[3].textContent = 'Distância';
+            ths[4].textContent = 'Volume';
+        }
+    }
+
     getElement('history-table-body').innerHTML = pageItems.map(item => {
+        const deviceLabel = item.id ? `${isSMWA ? 'SM-WA' : 'SM-WU'} · ${item.id}` : 'Não identificado';
+        if (isSMWA) {
+            return `
+                <tr>
+                    <td data-label="Data e hora"><strong>${escapeHTML(formatDateTime(item.timestamp, true))}</strong></td>
+                    <td data-label="Dispositivo">${escapeHTML(deviceLabel)}</td>
+                    <td data-label="Vazão" class="numeric">${toFiniteNumber(item.vazao) === null ? '—' : `${escapeHTML(formatNumber(item.vazao, 2))} m³/h`}</td>
+                    <td data-label="Consumo" class="numeric">${toFiniteNumber(item.consumo_acumulado) === null ? '—' : `${escapeHTML(formatNumber(item.consumo_acumulado, 2))} m³`}</td>
+                    <td data-label="Volume" class="numeric">${toFiniteNumber(item.volume) === null ? '—' : `${escapeHTML(formatNumber(item.volume, 2))} L`}</td>
+                    <td data-label="Status"><span class="row-status is-good">Registrado</span></td>
+                </tr>
+            `;
+        }
         const status = getLevelStatus(item.nivel);
-        const deviceLabel = item.id ? `SM-WU · ${item.id}` : 'Não identificado';
         return `
             <tr>
                 <td data-label="Data e hora"><strong>${escapeHTML(formatDateTime(item.timestamp, true))}</strong></td>
@@ -1038,14 +1175,15 @@ async function requestJSON(url, { allowNotFound = false, method = 'GET', body = 
     const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MILLISECONDS);
 
     try {
-        const response = await fetch(url, {
+        const fullUrl = apiUrl(url);
+        const response = await fetch(fullUrl, {
             cache: 'no-store',
-            credentials: 'same-origin',
+            credentials: 'include',
             method,
             headers: {
                 Accept: 'application/json',
                 ...(body !== null ? { 'Content-Type': 'application/json' } : {}),
-                ...(method !== 'GET' ? { 'X-CSRF-Token': CSRF_TOKEN } : {})
+                ...(method !== 'GET' && CSRF_TOKEN ? { 'X-CSRF-Token': CSRF_TOKEN } : {})
             },
             ...(body !== null ? { body: JSON.stringify(body) } : {}),
             signal: controller.signal
@@ -1062,6 +1200,11 @@ async function requestJSON(url, { allowNotFound = false, method = 'GET', body = 
             error.status = response.status;
             error.code = payload?.error?.code || 'REQUEST_FAILED';
             throw error;
+        }
+        if (payload?.csrf_token) {
+            CSRF_TOKEN = payload.csrf_token;
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            if (meta) meta.content = CSRF_TOKEN;
         }
         return payload;
     } catch (error) {
@@ -1357,7 +1500,12 @@ function bindAccountMenu() {
         event.stopPropagation();
         setOpen(dropdown.hidden);
     });
-    dropdown.addEventListener('click', event => event.stopPropagation());
+    dropdown.addEventListener('click', event => {
+        if (event.target.closest('a')) {
+            setOpen(false);
+        }
+        event.stopPropagation();
+    });
     document.addEventListener('click', () => setOpen(false));
     getElement('open-account').addEventListener('click', event => {
         setOpen(false);
@@ -1577,6 +1725,10 @@ function bindNavigation() {
         link.addEventListener('click', () => {
             setActiveNavigation(link.dataset.section);
             closeMobileMenu(false);
+            const target = getElement(link.dataset.section);
+            if (target) {
+                target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
         });
     });
 
@@ -1668,6 +1820,40 @@ function bindRefreshControls() {
     }, { once: true });
 }
 
+async function loadCurrentUser() {
+    try {
+        const payload = await requestJSON('/api/auth/me');
+        if (payload?.user) {
+            if (payload.csrf_token) {
+                CSRF_TOKEN = payload.csrf_token;
+                const meta = document.querySelector('meta[name="csrf-token"]');
+                if (meta) meta.content = CSRF_TOKEN;
+            }
+            const user = payload.user;
+            const initial = [...(user.name || '')][0]?.toUpperCase() || 'U';
+            document.querySelectorAll('.account-avatar').forEach(el => { el.textContent = initial; });
+            const titleEl = document.getElementById('account-title');
+            if (titleEl) titleEl.textContent = user.name || '';
+            document.querySelectorAll('.account-summary strong').forEach(el => { el.textContent = user.name || ''; });
+            document.querySelectorAll('.account-summary small').forEach(el => { el.textContent = user.email || ''; });
+            const emailEl = document.getElementById('account-email');
+            if (emailEl) emailEl.textContent = user.email || '';
+            document.querySelectorAll('.account-details dd').forEach((el, idx) => {
+                if (idx === 0) el.textContent = user.email || '';
+            });
+            if (user.role === 'admin') {
+                const adminLink = document.getElementById('admin-panel-link');
+                if (adminLink) adminLink.hidden = false;
+            }
+        }
+    } catch (error) {
+        if (error?.status === 401 || error?.message === 'Sessão expirada') {
+            window.location.assign(`/login?next=${encodeURIComponent(location.pathname + location.search + location.hash)}`);
+        }
+        throw error;
+    }
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
     initializeCharts();
     bindNavigation();
@@ -1680,6 +1866,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     bindPairing();
     bindReservoirManagement();
     try {
+        await loadCurrentUser();
         await loadReservoirs();
         if (dashboardState.selectedReservoirId) await updateDashboard();
     } catch (error) {
@@ -1692,4 +1879,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     resetRefreshTimer();
     dashboardState.elapsedTimer = window.setInterval(updateElapsedLabels, ELAPSED_REFRESH_MILLISECONDS);
+    if (location.hash) {
+        const targetId = location.hash.replace('#', '');
+        const target = getElement(targetId);
+        if (target) {
+            setActiveNavigation(targetId);
+            window.setTimeout(() => target.scrollIntoView({ behavior: 'smooth', block: 'start' }), 150);
+        }
+    }
 });

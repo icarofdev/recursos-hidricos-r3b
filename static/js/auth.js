@@ -1,15 +1,45 @@
 (() => {
     'use strict';
 
-    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    const apiBase = window.__API_BASE__ || document.querySelector('meta[name="api-base"]')?.content || '';
+    function apiUrl(endpoint) {
+        if (!apiBase || endpoint.startsWith('http://') || endpoint.startsWith('https://')) return endpoint;
+        return `${apiBase.replace(/\/+$/, '')}${endpoint.startsWith('/') ? '' : '/'}${endpoint}`;
+    }
+
+    let csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    if (csrfToken === '{{csrf}}') csrfToken = '';
+
+    async function getCsrfToken() {
+        if (csrfToken) return csrfToken;
+        try {
+            const response = await fetch(apiUrl('/api/auth/csrf'), {
+                credentials: 'include',
+                headers: { Accept: 'application/json' }
+            });
+            const payload = await response.json();
+            if (payload?.csrf_token) {
+                csrfToken = payload.csrf_token;
+                let meta = document.querySelector('meta[name="csrf-token"]');
+                if (!meta) {
+                    meta = document.createElement('meta');
+                    meta.name = 'csrf-token';
+                    document.head.append(meta);
+                }
+                meta.content = csrfToken;
+            }
+        } catch { /* fallback */ }
+        return csrfToken;
+    }
 
     async function request(url, options = {}) {
-        const response = await fetch(url, {
-            credentials: 'same-origin',
+        const token = options.method === 'POST' ? await getCsrfToken() : '';
+        const response = await fetch(apiUrl(url), {
+            credentials: 'include',
             headers: {
                 Accept: 'application/json',
                 ...(options.body ? { 'Content-Type': 'application/json' } : {}),
-                ...(options.method === 'POST' ? { 'X-CSRF-Token': csrfToken } : {})
+                ...(options.method === 'POST' && token ? { 'X-CSRF-Token': token } : {})
             },
             ...options
         });
@@ -19,6 +49,11 @@
             const error = new Error(payload?.error?.message || 'Não foi possível concluir. Tente novamente.');
             error.code = payload?.error?.code || 'REQUEST_FAILED';
             throw error;
+        }
+        if (payload?.csrf_token) {
+            csrfToken = payload.csrf_token;
+            const meta = document.querySelector('meta[name="csrf-token"]');
+            if (meta) meta.content = csrfToken;
         }
         return payload;
     }
@@ -60,10 +95,21 @@
         });
     });
 
+    const nextInput = document.querySelector('input[name="next"]');
+    if (nextInput) {
+        const urlNext = new URLSearchParams(window.location.search).get('next');
+        if (urlNext) nextInput.value = urlNext;
+    }
+
     const resetForm = document.getElementById('reset-form');
     if (resetForm) {
-        const token = resetForm.elements.token.value;
-        request(`/api/auth/reset-password.php?token=${encodeURIComponent(token)}`)
+        const urlToken = new URLSearchParams(window.location.search).get('token') || '';
+        const tokenInput = resetForm.elements.token;
+        const token = (tokenInput && tokenInput.value && tokenInput.value !== '{{token}}') ? tokenInput.value : urlToken;
+        if (tokenInput) tokenInput.value = token;
+        // O formulário retém o token; removê-lo da barra evita compartilhamento acidental.
+        if (urlToken) window.history.replaceState(null, '', '/redefinir-senha');
+        request(`/api/auth/reset-password?token=${encodeURIComponent(token)}`)
             .then(result => {
                 document.getElementById('token-status').textContent = result.valid
                     ? 'O link é válido. Defina uma senha forte para continuar.'
@@ -79,5 +125,18 @@
 
     if (document.getElementById('reset-success') && new URLSearchParams(location.search).get('reset') === 'success') {
         document.getElementById('reset-success').hidden = false;
+    }
+
+    const pathname = window.location.pathname;
+    if (['/login', '/cadastro'].some(p => pathname === p || pathname.endsWith(p))) {
+        fetch(apiUrl('/api/auth/me'), { credentials: 'include', headers: { Accept: 'application/json' } })
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+                if (data?.user) {
+                    const next = new URLSearchParams(window.location.search).get('next') || '/';
+                    window.location.assign(next.startsWith('/') && !next.startsWith('//') ? next : '/');
+                }
+            })
+            .catch(() => {});
     }
 })();

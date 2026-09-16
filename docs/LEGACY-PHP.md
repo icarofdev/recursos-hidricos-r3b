@@ -1,0 +1,260 @@
+# Legado PHP/VPS — referência histórica, não publicar na Cloudflare
+
+O fluxo atual é descrito no README da raiz. Este documento e os arquivos PHP,
+MQTT e deploy antigos foram preservados para comparação e eventual migração
+de dados. Não fazem parte do build `dist/`. Exemplos e caminhos abaixo se
+referem à arquitetura anterior; não reaproveite suas credenciais.
+
+Plataforma PHP multiusuário conectada à telemetria real do medidor de nível ultrassônico SM-WU. Contas, sessões, reservatórios e leituras são isolados no backend; o navegador nunca recebe credenciais de dispositivo, Brevo, MQTT ou banco.
+
+```text
+SM-WU ──token próprio──► ingestão ──► leitura/reservatório ──► autorização da sessão ──► dashboard
+```
+
+O SM-WU e o dashboard não precisam estar na mesma rede Wi-Fi. O endpoint precisa ficar acessível pela Internet; `php -S 127.0.0.1:8080 router.php` é apenas desenvolvimento local.
+
+## Contrato de dados
+
+O contrato canônico contém os três valores medidos pelo SM-WU:
+
+```json
+{
+  "id": 1,
+  "distancia": 42.50,
+  "nivel": 75.00,
+  "volume": 1253.00,
+  "rssi_wifi": -60.00
+}
+```
+
+`id` deve ser um inteiro positivo. No MQTT, também deve coincidir com `{id}` do tópico. A V5.10 envia a distância como `d`; a entrada HTTP converte esse nome para `distancia`, aceita nomes em maiúsculas e normaliza números em texto. Campos ausentes, desconhecidos, duplicados, valores fora das faixas básicas e dispositivos não autorizados são rejeitados.
+
+O status MQTT opcional usa `sm-wu/{id}/status`, QoS 1 e retenção:
+
+```json
+{"id":1,"status":"online"}
+```
+
+O dispositivo pode publicar `online` ao conectar e configurar uma Last Will retida com `{"id":1,"status":"offline"}`.
+
+## Requisitos
+
+- PHP 8.1 ou superior com `json`, `openssl`, `PDO` e `pdo_mysql`;
+- Composer 2;
+- MySQL 8+ ou MariaDB 10.2+;
+- EMQX Cloud (ou outro broker MQTT) somente se a integração MQTT opcional for usada;
+- um processo PHP CLI persistente para o subscriber.
+
+## Configuração
+
+```powershell
+composer install
+Copy-Item .env.example .env
+```
+
+O `.env.example` já parte da configuração online do deployment `smwa-r3b`:
+
+- `MQTT_HOST=r10116ac.ala.us-east-1.emqxsl.com` (confirme o hostname no EMQX Cloud antes de usar);
+- `MQTT_PORT=8883`, `MQTT_TLS=true` e `MQTT_TLS_VERIFY_PEER=true`;
+- `MQTT_USERNAME=smwa_device` e `MQTT_PASSWORD` com a senha local do deployment;
+- `MQTT_TOPIC=sm-wu/+/data` e `MQTT_STATUS_TOPIC=sm-wu/+/status`;
+- `MQTT_ALLOWED_DEVICE_IDS`, por exemplo `1` ou `1,2,3`;
+- `SMWU_DEVICE_TOKEN` com um token forte para o fallback HTTPS.
+- `APP_KEY` com uma chave aleatória exclusiva e `SESSION_SAVE_PATH` fora da área pública;
+- `BREVO_API_KEY`, `BREVO_SENDER_EMAIL` e `BREVO_SENDER_NAME` para recuperação de senha;
+- `APP_URL` com a origem HTTPS final usada nos links de redefinição.
+
+Não versione `.env`, senha MQTT nem token. Se a rede bloquear TCP `8883`, não desative TLS: execute `powershell -ExecutionPolicy Bypass -File scripts/test-mqtt-cloud.ps1` e use o fallback HTTPS abaixo.
+
+Também é possível sobrescrever no `.env`:
+
+- `DB_HOST`, `DB_PORT`, `DB_DATABASE`, `DB_USERNAME` e `DB_PASSWORD`;
+- `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME` e `MQTT_PASSWORD`;
+- `MQTT_TLS_CA_FILE` somente se o PHP não encontrar a CA confiável do sistema.
+
+O `.env` está ignorado pelo Git. Em produção, use autenticação, TLS e ACL que permitam a cada dispositivo publicar apenas em seus próprios tópicos.
+
+### Banco de dados
+
+Importe [database/schema.sql](database/schema.sql):
+
+```bash
+mysql --host=127.0.0.1 --port=3306 --user=root --password < database/schema.sql
+```
+
+Em uma instalação existente, aplique a migração idempotente antes de publicar o novo código:
+
+```bash
+php scripts/migrate.php
+```
+
+O migrador adiciona `users`, `reservoirs`, `password_reset_tokens`, `rate_limits` e os campos de propriedade/escopo sem apagar dispositivos ou leituras. `smwu_readings` mantém os cinco campos reais e recebe `reservoir_id`; a tabela legada `sensor_readings` permanece preservada e também recebe o campo de escopo.
+
+### Contas, sessão e recuperação
+
+Visitantes que acessam `/` são enviados para `/login`. Cadastro, login, usuário atual e logout usam sessão nativa PHP com cookie `HttpOnly`, `SameSite=Lax`, `Secure` sob HTTPS, rotação de ID, limite de inatividade e token CSRF. “Lembrar de mim” mantém a sessão por até 30 dias. Uma redefinição de senha incrementa a versão de sessão e revoga acessos anteriores.
+
+A recuperação chama o endpoint transacional oficial do Brevo somente no backend. O token aleatório tem 256 bits, validade configurável entre 15 e 30 minutos, uso único e somente seu SHA-256 é armazenado. A resposta da solicitação é sempre genérica. Sem credenciais Brevo, o fluxo não envia e-mail e registra apenas um erro seguro no servidor.
+
+### Pareamento de dispositivos
+
+Depois que um equipamento real já tiver se comunicado, gere um código secreto de ativação:
+
+```bash
+php scripts/provision-device.php 1 1440
+```
+
+O segundo argumento é a validade em minutos. O código puro aparece uma única vez; o banco guarda apenas seu hash. O usuário informa esse código na tela “Conectar dispositivo”, escolhe um nome de até 60 caracteres e a reivindicação ocorre de forma atômica. Ao desvincular, a associação termina sem apagar o histórico; um novo pareamento exige um novo código.
+
+## Execução
+
+Se optar por MQTT, instale o serviço de exemplo [deploy/systemd/smwa-subscriber.service.example](deploy/systemd/smwa-subscriber.service.example), ajuste o caminho do projeto e habilite-o no `systemd`.
+
+Para um teste manual local:
+
+```powershell
+php mqtt/subscriber.php
+```
+
+Em outro terminal, sirva a aplicação com o roteador fornecido:
+
+```powershell
+php -S 127.0.0.1:8080 router.php
+```
+
+Abra [http://127.0.0.1:8080](http://127.0.0.1:8080). No Apache/XAMPP, aponte o `DocumentRoot` ou um Alias para esta pasta e mantenha as regras do `.htaccess` habilitadas.
+
+Para um túnel de teste, publique uma segunda instância restrita somente à ingestão. Assim a dashboard e os endpoints de consulta não ficam expostos:
+
+```powershell
+php -S 127.0.0.1:8081 device-ingest-router.php
+```
+
+O subscriber usa MQTT 3.1.1, sessão persistente, backoff de reconexão e os filtros existentes:
+
+```text
+sm-wu/+/data
+sm-wu/+/status
+```
+
+Falhas de validação são registradas sem derrubar o processo. Em falha de banco, o worker refaz a conexão e a sessão MQTT permite ao broker enfileirar as mensagens seguintes conforme a configuração de QoS/sessão.
+
+### Fallback HTTPS
+
+Configure o SM-WU em **Tipo de envio: Padrão** e **Protocolo: POST**. Envie para `POST /api/device/ingest.php` com `Authorization: Bearer SEU_TOKEN` (ou `X-Device-Token`) quando o firmware permitir cabeçalhos. O endpoint aceita:
+
+```json
+{
+  "id": 1,
+  "distancia": 42.5,
+  "nivel": 75.0,
+  "volume": 1253.0,
+  "rssi_wifi": -60.0
+}
+```
+
+O token vem de `SMWU_DEVICE_TOKEN` ou de `DEVICE_TOKENS`; token ausente, inválido ou pertencente a outro ID é rejeitado antes de qualquer gravação. A validação e o contrato são os mesmos do caminho MQTT. A leitura passa a aparecer somente para o proprietário autenticado do reservatório vinculado.
+
+Firmwares que não oferecem configuração de cabeçalhos podem usar `POST /api/device/ingest.php?token=SEU_TOKEN`. Esse formato só é aceito quando a requisição original usa HTTPS. O SM-WU envia `Content-Type: application/json` e pode serializar todos os valores como strings; a entrada HTTP normaliza antes de validar. Prefira cabeçalho quando possível e configure o servidor web para não registrar query strings.
+
+O firmware V5.10 força HTTP no campo de servidor. Para manter TLS fora da rede local, execute o gateway em uma interface privada:
+
+```powershell
+php -S 192.168.0.2:8082 smwu-gateway-router.php
+```
+
+Configure o equipamento com servidor `192.168.0.2`, porta `8082` e caminho `/smwu`. O gateway aceita somente os IPs de `SMWU_LOCAL_DEVICE_IPS` e retransmite para `SMWU_FORWARD_URL` por HTTPS, usando o token somente no cabeçalho. A senha/token não fica armazenada no equipamento.
+
+```text
+SM-WU ──HTTPS──► api/device/ingest.php ──► MySQL/MariaDB ──► API PHP ──► dashboard
+```
+
+Exemplo de teste:
+
+```bash
+curl -X POST http://127.0.0.1:8080/api/device/ingest.php \
+  -H 'Authorization: Bearer SEU_TOKEN' \
+  -H 'Content-Type: application/json' \
+  -d '{"id":1,"distancia":42.5,"nivel":75.0,"volume":1253.0,"rssi_wifi":-60.0}'
+```
+
+## API PHP
+
+Os endpoints de consulta aceitam apenas `GET`, respondem JSON sem cache, exigem sessão e recebem um `reservoir_id` que é validado contra o usuário atual:
+
+- `api/device/current.php`: leitura mais recente e estado do dispositivo;
+- `api/device/history.php?hours=24&limit=300`: histórico do período;
+- `api/device/status.php`: estado e última comunicação;
+- `api/device/alerts.php`: alertas de perda de comunicação e nível baixo/crítico.
+
+`api/device/ingest.php` aceita somente `POST` com autenticação própria do equipamento e não usa sessão de usuário.
+
+Nunca é aceito `userId`/`ownerId` do navegador. A autorização de leitura, histórico, status e alertas acontece na query pelo par sessão + reservatório, devolvendo 404 para recursos de terceiros. O horário é gravado em UTC e devolvido no fuso `APP_TIMEZONE`. O dispositivo passa a `offline` quando recebe a Last Will correspondente ou quando ultrapassa `DEVICE_OFFLINE_AFTER_SECONDS` sem comunicação.
+
+Rotas adicionais:
+
+- `api/auth/`: cadastro, login, logout, usuário atual e redefinição;
+- `api/reservoirs/`: lista autorizada e renomeação;
+- `api/devices/`: validação do código, conexão e desvinculação.
+
+Exemplo de resposta da leitura atual:
+
+```json
+{
+  "success": true,
+  "device": {
+    "id": 1,
+    "status": "online",
+    "last_seen": "2026-08-20T12:00:00-03:00",
+    "offline_after_seconds": 90
+  },
+  "data": {
+    "id": 1,
+    "distancia": 42.5,
+    "nivel": 75.0,
+    "volume": 1253.0,
+    "rssi_wifi": -60.0,
+    "timestamp": "2026-08-20T12:00:00-03:00"
+  }
+}
+```
+
+## Dashboard
+
+`index.php` organiza a interface responsiva de monitoramento com seletor de múltiplos reservatórios, KPIs, reservatório, gráficos, alertas, dispositivos, histórico e menu de conta. Contas vazias recebem onboarding em vez de uma dashboard quebrada. `static/js/dashboard.js` consulta somente o reservatório autorizado, atualiza a tela sem reload, sincroniza o histórico a cada 30 segundos e pausa o polling quando a aba não está visível. A série temporal exibe `nivel` e o consumo calculado localmente pela soma das reduções entre leituras consecutivas de `volume`; quando faltam leituras, o recurso é apresentado como indisponível.
+
+O roteador opcional `dashboard-share-router.php` mantém o compartilhamento por HTTP Basic em modo somente leitura. Configure usuário, senha e o e-mail de uma conta já cadastrada em `DASHBOARD_SHARE_USERNAME`, `DASHBOARD_SHARE_PASSWORD` e `DASHBOARD_SHARE_USER_EMAIL`; as consultas continuam limitadas aos reservatórios dessa conta e qualquer tentativa de alteração é recusada.
+
+## Testes
+
+A suíte de domínio usa SQLite em memória; a suíte HTTP abre um servidor efêmero e valida redirecionamentos, sessão, cadastro, login, logout e proteção de APIs. Não precisa de broker nem MySQL:
+
+```powershell
+composer test
+```
+
+Para publicar uma vez o payload de exemplo no broker configurado no `.env`:
+
+```powershell
+php mqtt/publish_test.php 1
+```
+
+As consultas privadas devem ser feitas pelo navegador autenticado e sempre com `reservoir_id`; não existem mais atalhos públicos por ID do dispositivo.
+
+## Arquivos principais
+
+- `mqtt/subscriber.php`: subscriber MQTT persistente;
+- `api/device/ingest.php`: fallback HTTPS autenticado para telemetria;
+- `smwu-gateway-router.php`: upgrade de HTTP local do firmware V5.10 para HTTPS;
+- `mqtt/publish_test.php`: publicação manual do payload real de exemplo;
+- `scripts/test-mqtt-cloud.ps1`: diagnóstico inicial de DNS e TCP `8883` no Windows;
+- `deploy/systemd/smwa-subscriber.service.example`: execução contínua do subscriber em produção;
+- `src/Mqtt/`: tópicos, validação e cliente MQTT;
+- `src/DeviceRepository.php`: persistência, estado e histórico;
+- `src/Auth/`: contas e redefinição de senha;
+- `src/ReservoirRepository.php`: propriedade, pareamento e gerenciamento;
+- `src/Database/SchemaMigrator.php`: migração incremental;
+- `src/Mail/BrevoMailer.php`: e-mail transacional backend-only;
+- `api/device/`: API consumida pelo dashboard;
+- `database/schema.sql`: schema MySQL/MariaDB;
+- `index.php` e `static/js/dashboard.js`: interface e integração da API.

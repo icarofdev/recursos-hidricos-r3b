@@ -1,0 +1,217 @@
+/* =========================================================
+   Hidra R3B — Tema e Cores Compartilhadas (Claro / Escuro / Auto)
+   ========================================================= */
+
+:root,
+[data-theme="light"],
+:root[data-theme="light"] {
+    color-scheme: light;
+    --color-background: #f3f7fa;
+    --color-surface: #ffffff;
+    --color-surface-subtle: #f7fafc;
+    --color-surface-strong: #edf4f7;
+    --color-sidebar: #0b2638;
+    --color-sidebar-active: #123b53;
+    --color-primary: #0c5674;
+    --color-primary-strong: #073b55;
+    --color-water: #0f9fbc;
+    --color-water-light: #51c9dc;
+    --color-water-soft: #e1f6f9;
+    --color-text: #142733;
+    --color-text-secondary: #536975;
+    --color-text-muted: #788b95;
+    --color-border: #dce7ec;
+    --color-border-strong: #c8d8df;
+    --color-success: #177a5b;
+    --color-success-soft: #e5f4ee;
+    --color-warning: #9a6508;
+    --color-warning-soft: #fff4dc;
+    --color-critical: #b53d42;
+    --color-critical-soft: #fce9e9;
+    --color-offline: #667986;
+    --color-offline-soft: #ebf0f3;
+    --color-card-bg: #ffffff;
+    --color-input-bg: #ffffff;
+    --color-input-border: #dce7ec;
+    --color-input-text: #142733;
+    --color-tooltip-bg: #0b2638;
+    --color-tooltip-text: #ffffff;
+    --color-chart-grid: #e6eef1;
+    --color-chart-tick: #788b95;
+    --color-topbar-bg: rgba(255, 255, 255, 0.93);
+    --shadow-xs: 0 1px 2px rgba(8, 39, 56, 0.035);
+    --shadow-sm: 0 5px 18px rgba(8, 39, 56, 0.055);
+    --shadow-md: 0 14px 38px rgba(8, 39, 56, 0.08);
+
+    /* Variáveis do layout de autenticação */
+    --surface: #ffffff;
+    --background: #f2f7fa;
+    --border: #d7e5ec;
+    --text: #173247;
+    --muted: #607886;
+    --shadow: 0 24px 70px rgba(7, 29, 42, .14);
+}
+
+[data-theme="dark"],
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --color-background: #071722;
+    --color-surface: #0c2333;
+    --color-surface-subtle: #0f2b3e;
+    --color-surface-strong: #13344b;
+    --color-sidebar: #05141f;
+    --color-sidebar-active: #0c2a3d;
+    --color-primary: #148db6;
+    --color-primary-strong: #1cb0df;
+    --color-water: #18b3d4;
+    --color-water-light: #5de0f5;
+    --color-water-soft: rgba(24, 179, 212, 0.16);
+    --color-text: #e1edf2;
+    --color-text-secondary: #9cb3c0;
+    --color-text-muted: #6f8694;
+    --color-border: #16364a;
+    --color-border-strong: #214b66;
+    --color-success: #2ecb93;
+    --color-success-soft: rgba(46, 203, 147, 0.15);
+    --color-warning: #eab308;
+    --color-warning-soft: rgba(234, 179, 8, 0.15);
+    --color-critical: #ef4444;
+    --color-critical-soft: rgba(239, 68, 68, 0.15);
+    --color-offline: #8ea3b0;
+    --color-offline-soft: rgba(142, 163, 176, 0.15);
+    --color-card-bg: #0c2333;
+    --color-input-bg: #081d2b;
+    --color-input-border: #1a4561;
+    --color-input-text: #e1edf2;
+    --color-tooltip-bg: #05141f;
+    --color-tooltip-text: #ffffff;
+    --color-chart-grid: rgba(255, 255, 255, 0.08);
+    --color-chart-tick: #8ea3b0;
+    --color-topbar-bg: rgba(12, 35, 51, 0.93);
+    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --shadow-sm: 0 5px 18px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 14px 38px rgba(0, 0, 0, 0.5);
+
+    /* Variáveis do layout de autenticação */
+    --surface: #0c2333;
+    --background: #071722;
+    --border: #16364a;
+    --text: #e1edf2;
+    --muted: #8ea3b0;
+    --shadow: 0 24px 70px rgba(0, 0, 0, .45);
+}
+
+/* =========================================================
+   Componente: Seletor Discreto de Tema (Compacto e Acessível)
+   ========================================================= */
+
+.theme-selector {
+    display: inline-flex;
+    align-items: center;
+    background: var(--color-surface-subtle);
+    border: 1px solid var(--color-border);
+    border-radius: 9999px;
+    padding: 3px;
+    gap: 2px;
+    vertical-align: middle;
+    user-select: none;
+    transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+[data-theme="dark"] .theme-selector {
+    background: #071722;
+    border-color: #16364a;
+}
+
+.theme-option {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--color-text-secondary);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 9999px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: all 0.15s ease-in-out;
+    white-space: nowrap;
+}
+
+.theme-option:hover {
+    color: var(--color-text);
+    background: rgba(12, 86, 116, 0.08);
+}
+
+[data-theme="dark"] .theme-option {
+    color: #9cb3c0;
+}
+
+[data-theme="dark"] .theme-option:hover {
+    color: #ffffff;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.theme-option:focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+}
+
+.theme-option.is-selected {
+    color: var(--color-primary-strong) !important;
+    background: #ffffff !important;
+    border-color: var(--color-border-strong) !important;
+    box-shadow: 0 1px 3px rgba(8, 39, 56, 0.12);
+    font-weight: 700;
+}
+
+[data-theme="dark"] .theme-option.is-selected {
+    background: #13344b !important;
+    color: #ffffff !important;
+    border-color: var(--color-primary) !important;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+    font-weight: 700;
+}
+
+.theme-option .theme-icon {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+
+/* Modificadores de tamanho / posicionamento */
+.theme-selector.compact {
+    padding: 2px;
+}
+.theme-selector.compact .theme-option {
+    padding: 4px 8px;
+    font-size: 11px;
+    gap: 4px;
+}
+.theme-selector.compact .theme-icon {
+    width: 12px;
+    height: 12px;
+}
+
+/* Responsividade celular */
+@media (max-width: 480px) {
+    .theme-option span {
+        display: none;
+    }
+    .theme-option {
+        padding: 6px 8px;
+    }
+    .theme-option .theme-icon {
+        width: 15px;
+        height: 15px;
+    }
+}

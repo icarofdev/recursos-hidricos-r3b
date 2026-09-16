@@ -1,0 +1,38 @@
+name = "hidra-r3b"
+main = "dist/worker/index.js"
+compatibility_date = "2026-03-01"
+
+[vars]
+APP_ENV = "production"
+MONITORIE_MODE = "unconfigured"
+MAIL_MODE = "brevo"
+MONITORIE_CACHE_SECONDS = "60"
+DEVICE_OFFLINE_AFTER_SECONDS = "90"
+INGEST_ENABLED = "false"
+BREVO_SENDER_EMAIL = "recursoshidricosr3b@gmail.com"
+BREVO_SENDER_NAME = "Hidra R3B"
+
+
+[[d1_databases]]
+binding = "DB"
+database_name = "hidra-r3b"
+database_id = "0148ef8b-e4c4-44d1-b188-0dcd159a23db"
+migrations_dir = "cloudflare/migrations"
+
+[env.preview]
+name = "hidra-r3b-preview"
+
+[env.preview.vars]
+APP_ENV = "preview"
+MONITORIE_MODE = "unconfigured"
+MAIL_MODE = "disabled"
+MONITORIE_CACHE_SECONDS = "60"
+DEVICE_OFFLINE_AFTER_SECONDS = "90"
+INGEST_ENABLED = "false"
+
+[[env.preview.d1_databases]]
+binding = "DB"
+database_name = "hidra-r3b-preview"
+database_id = "c794e2f5-15ca-4764-af44-58b17b9e225f"
+migrations_dir = "cloudflare/migrations"
+

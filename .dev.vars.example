@@ -1,0 +1,14 @@
+# Somente nomes/valores vazios. Não copie o .env legado.
+# npm run dev gera secrets locais aleatórios em .dev.vars se o arquivo não existir.
+SESSION_SECRET=
+PASSWORD_PEPPER=
+APP_URL=
+BREVO_API_KEY=
+BREVO_SENDER_EMAIL=
+BREVO_SENDER_NAME=
+MONITORIE_BASE_URL=
+MONITORIE_CREDENTIALS=
+DEVICE_TOKENS=
+DASHBOARD_SHARE_USERNAME=
+DASHBOARD_SHARE_PASSWORD=
+DASHBOARD_SHARE_USER_EMAIL=
