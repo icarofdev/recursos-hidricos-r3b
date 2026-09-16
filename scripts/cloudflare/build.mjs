@@ -107,7 +107,8 @@ await copyFile('dist/worker/index.js', 'dist/_worker.js');
 // 7. Auditoria de segurança rigorosa em dist/frontend
 for (const entry of await readdir('dist/frontend', {recursive: true, withFileTypes: true})) {
   if (!entry.isFile()) continue;
-  const rel = path.relative('dist/frontend', path.join(entry.parentPath, entry.name)).split(path.sep).join('/');
+  const parentDir = entry.parentPath || entry.path || 'dist/frontend';
+  const rel = path.relative('dist/frontend', path.join(parentDir, entry.name)).split(path.sep).join('/');
   if (/\.php$|\.env|\.dev\.vars|\.sql$|tests|migrations/.test(rel)) {
     throw new Error(`Arquivo proibido em dist/frontend: ${rel}`);
   }

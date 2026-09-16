@@ -25,6 +25,7 @@ export function isAllowedOrigin(c: Context, origin: string | null): boolean {
  if (!origin) return true;
  if (origin === c.url.origin) return true;
  if (isLocal(c) && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true;
+ if (origin === 'https://hidra-r3b.vercel.app' || origin === 'https://frontend-sage-six-95.vercel.app') return true;
  if (c.env.APP_URL) {
   try {
    const appOrigin = new URL(c.env.APP_URL).origin;

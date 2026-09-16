@@ -3,9 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": { "node": ">=20" },
   "scripts": {
     "build": "node scripts/cloudflare/build.mjs",
+    "start": "node -e \"console.log('Hidra R3B ativo no Cloudflare Workers e Vercel')\"",
     "dev": "node scripts/cloudflare/dev-secrets.mjs && npm run build && node scripts/cloudflare/wrangler.mjs pages dev dist --ip 127.0.0.1 --port 8788 --binding APP_ENV=development --binding MONITORIE_MODE=mock --binding MAIL_MODE=disabled",
     "dev:mail": "node scripts/cloudflare/dev-secrets.mjs && npm run build && node scripts/cloudflare/wrangler.mjs pages dev dist --ip 127.0.0.1 --port 8788 --binding APP_ENV=development --binding MONITORIE_MODE=mock --binding MAIL_MODE=brevo",
     "mail:test": "node --dns-result-order=ipv4first scripts/cloudflare/send-test-email.mjs",
@@ -15,9 +16,11 @@
     "test": "npm run build && node --test --test-concurrency=1 tests/cloudflare/*.test.mjs",
     "check": "npm run typecheck && npm test"
   },
+  "dependencies": {
+    "esbuild": "^0.25.0"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "latest",
-    "esbuild": "^0.25.0",
     "miniflare": "^4.0.0",
     "typescript": "^5.9.0",
     "wrangler": "^4.0.0"
