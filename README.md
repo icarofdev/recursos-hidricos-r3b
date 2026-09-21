@@ -10,7 +10,7 @@ Navegador → Frontend Estático (Vercel)
                                         → Brevo (recuperação de senha transacional)
 ```
 
-**Estado da integração Monitor IE:** o contrato REST ThingsBoard 3.6.4 PE e o uso de JWT via `X-Authorization` estão implementados. A ativação real continua **fail-closed** até confirmar, pela consulta read-only, o UUID, as keys e as unidades de cada medidor. O token fica somente em `MONITORIE_JWT`; não há login ou refresh automático.
+**Estado da integração Monitor IE:** Integração real confirmada e ativa em produção (`MONITORIE_MODE=live`). Mapeamento validado ponta a ponta para medidores **SM-WU** (chaves: `d` em cm, `nivel` em %, `volume` em L, `rssi_wifi` em dBm) e **SM-WA** (chaves: `vazao` em L/h, `consumo` em L, `rssi_wifi` em dBm). Cache configurado para 300 segundos com coordenação atômica no D1 (`D1MonitorieGate`) e desduplicação _single-flight_. Ingestão direta permanece desabilitada (`INGEST_ENABLED=false`).
 
 ---
 

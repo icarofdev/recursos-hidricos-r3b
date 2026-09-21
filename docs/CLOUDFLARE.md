@@ -78,9 +78,11 @@ As configurações não secretas ficam em `[vars]` e `[env.preview.vars]` no `wr
 | `READINGS_RETENTION_DAYS`      | `90`                                | `90`                             |
 | `AUDIT_RETENTION_DAYS`         | `180`                               | `180`                            |
 | `RETENTION_BATCH_SIZE`         | `500`                               | `500`                            |
-| `MONITORIE_CACHE_SECONDS`      | `60`                                | `60`                             |
+| `MONITORIE_CACHE_SECONDS`      | `300`                               | `300`                            |
 | `DEVICE_OFFLINE_AFTER_SECONDS` | `90`                                | `90`                             |
-| `MONITORIE_MODE`               | `unconfigured`                      | `unconfigured`                   |
+| `MONITORIE_MODE`               | `live`                              | `live`                           |
+| `MONITORIE_SMWU_MAPPING`       | JSON mapeando chaves SM-WU          | JSON mapeando chaves SM-WU       |
+| `MONITORIE_SMWA_MAPPING`       | JSON mapeando chaves SM-WA          | JSON mapeando chaves SM-WA       |
 | `MAIL_MODE`                    | `disabled`                          | `disabled`                       |
 | `INGEST_ENABLED`               | `false`                             | `false`                          |
 
