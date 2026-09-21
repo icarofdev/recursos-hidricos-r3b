@@ -47,11 +47,35 @@ npm run monitorie:probe -- history --device-id UUID_CONFIRMADO --keys chave1,cha
 
 Respeite pelo menos 70 segundos entre execuções enquanto o limite informado pelo suporte não for formalmente detalhado. As consultas são somente leitura; não alteram dispositivos, alarmes ou configurações.
 
-## Mapeamento explícito de chaves e unidades
+## Mapeamento explícito de chaves e classificação de unidades
 
-O Swagger define o envelope de telemetria, mas as keys são criadas pelo firmware. Portanto, o adaptador só entra em operação depois que `devices` e `keys` confirmarem o UUID e os nomes reais. Não há fallback heurístico.
+O Swagger do ThingsBoard (`3.6.4PE`) define a assinatura dos endpoints HTTP, mas **não fornece metadados de unidade ou especificação técnica dos campos de telemetria**. A IE Tecnologia não disponibilizou manual técnico de integração ou datasheet dos firmwares SM-WU e SM-WA.
 
-Cada variável de mapping é um objeto JSON. Toda chave obrigatória precisa declarar a `key` real e a unidade de origem `unit`; o backend normaliza para o contrato canônico do frontend:
+Portanto, as unidades configuradas não são formalmente homologadas pelo fornecedor; são classificadas da seguinte forma:
+
+### Classificação de unidades
+
+1. **`vazao` = L/h**: **CONFIGURADA / PROVISÓRIA**.
+   - _Evidência:_ Rótulo visual do widget na tela Técnica do painel web da Monitor IE (`Vazão [L/H]`).
+   - _Ressalva:_ A API retorna apenas o valor numérico (`vazao: 0`), sem confirmação documental de escala ou periodicidade.
+2. **`consumo` = L**: **CONFIGURADA / PROVISÓRIA**.
+   - _Evidência:_ Rótulos visuais no painel web (`Consumido [L]`, `Consumo Acumulado [L]`) e indicação de "consumo em litros" em Relatórios, associado a `ppl = 1` (pulsos por litro).
+   - _Ressalva:_ Não há documento de API confirmando se o valor acumulado é resetado pelo medidor ou se representa litros absolutos.
+3. **`d` = cm**: **CONFIGURADA / PROVISÓRIA**.
+   - _Evidência:_ Coerência física empírica (leitura real `d: 188` com `nivel: 0` condizente com sensor a 188 cm do fundo em reservatório vazio) e contrato legado do sensor ultrassônico.
+   - _Ressalva:_ Nenhuma documentação da IE Tecnologia atesta se a unidade é milímetros (`mm`) ou centímetros (`cm`).
+4. **`nivel` = %**: **CONFIGURADA / PROVISÓRIA**.
+   - _Evidência:_ Coerência com escala percentual de 0 a 100% (`nivel: 0`).
+   - _Ressalva:_ Sem especificação de firmware por escrito.
+5. **`volume` = L**: **CONFIGURADA / PROVISÓRIA**.
+   - _Evidência:_ Contrato canônico de reservatório do sistema R3B.
+   - _Ressalva:_ Sem confirmação se a ThingsBoard calcula volume em litros, m³ ou se depende de calibração geométrica prévia na nuvem.
+6. **Outras chaves (`ppl`, `consumo_delta`)**: **BLOCKED**.
+   - Chaves sem especificação semântica comprovada no contrato permanecem bloqueadas para ingestão.
+
+### Estrutura de configuração
+
+Cada variável de mapping é um objeto JSON. O operador declara a `key` real e a unidade de origem `unit` que o adaptador normaliza para o contrato canônico do frontend:
 
 - SM-WU: `distancia` em `cm`, `nivel` em `%`, `volume` em `L`, `rssi_wifi` em `dBm`.
 - SM-WA: `vazao` em `L/h`, `consumo_acumulado` em `L`, `rssi_wifi` em `dBm`; `volume` em `L` é opcional.
