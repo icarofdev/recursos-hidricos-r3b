@@ -5,12 +5,15 @@ compatibility_date = "2026-03-01"
 [vars]
 APP_ENV = "production"
 MONITORIE_MODE = "unconfigured"
-MAIL_MODE = "brevo"
+MAIL_MODE = "disabled"
 MONITORIE_CACHE_SECONDS = "60"
 DEVICE_OFFLINE_AFTER_SECONDS = "90"
 INGEST_ENABLED = "false"
-BREVO_SENDER_EMAIL = "recursoshidricosr3b@gmail.com"
-BREVO_SENDER_NAME = "Hidra R3B"
+CORS_ORIGINS = ""
+APP_URL = ""
+READINGS_RETENTION_DAYS = "90"
+AUDIT_RETENTION_DAYS = "180"
+RETENTION_BATCH_SIZE = "500"
 
 
 [[d1_databases]]
@@ -29,6 +32,11 @@ MAIL_MODE = "disabled"
 MONITORIE_CACHE_SECONDS = "60"
 DEVICE_OFFLINE_AFTER_SECONDS = "90"
 INGEST_ENABLED = "false"
+CORS_ORIGINS = ""
+APP_URL = ""
+READINGS_RETENTION_DAYS = "90"
+AUDIT_RETENTION_DAYS = "180"
+RETENTION_BATCH_SIZE = "500"
 
 [[env.preview.d1_databases]]
 binding = "DB"
@@ -36,3 +44,10 @@ database_name = "hidra-r3b-preview"
 database_id = "c794e2f5-15ca-4764-af44-58b17b9e225f"
 migrations_dir = "cloudflare/migrations"
 
+
+[triggers]
+crons = ["*/10 * * * *"]
+
+[observability.logs]
+enabled = true
+invocation_logs = false

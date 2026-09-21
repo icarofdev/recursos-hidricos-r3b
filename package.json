@@ -3,26 +3,48 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=22 <23"
+  },
   "scripts": {
     "build": "node scripts/cloudflare/build.mjs",
-    "start": "node -e \"console.log('Hidra R3B ativo no Cloudflare Workers e Vercel')\"",
-    "dev": "node scripts/cloudflare/dev-secrets.mjs && npm run build && node scripts/cloudflare/wrangler.mjs pages dev dist --ip 127.0.0.1 --port 8788 --binding APP_ENV=development --binding MONITORIE_MODE=mock --binding MAIL_MODE=disabled",
-    "dev:mail": "node scripts/cloudflare/dev-secrets.mjs && npm run build && node scripts/cloudflare/wrangler.mjs pages dev dist --ip 127.0.0.1 --port 8788 --binding APP_ENV=development --binding MONITORIE_MODE=mock --binding MAIL_MODE=brevo",
-    "mail:test": "node --dns-result-order=ipv4first scripts/cloudflare/send-test-email.mjs",
-    "db:local": "node scripts/cloudflare/wrangler.mjs d1 migrations apply DB --local",
-    "dev:seed": "node scripts/cloudflare/provision.mjs --demo",
-    "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test --test-concurrency=1 tests/cloudflare/*.test.mjs",
-    "check": "npm run typecheck && npm test"
+    "build:production": "node scripts/cloudflare/build.mjs --production",
+    "dev": "node scripts/cloudflare/dev.mjs",
+    "dev:monitorie": "node scripts/cloudflare/dev-monitorie.mjs",
+    "dev:api": "node scripts/cloudflare/dev-api.mjs",
+    "dev:frontend": "node scripts/cloudflare/dev-frontend.mjs",
+    "db:local": "node scripts/cloudflare/local-db.mjs migrate",
+    "dev:seed": "node scripts/cloudflare/local-db.mjs seed",
+    "admin": "node scripts/cloudflare/admin.mjs",
+    "monitorie:probe": "node scripts/cloudflare/monitorie-probe.mjs",
+    "monitorie:store-jwt": "node scripts/cloudflare/store-monitorie-jwt.mjs",
+    "monitorie:store-jwt-browser": "node scripts/cloudflare/store-monitorie-jwt.mjs --server",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.frontend.json",
+    "lint": "eslint cloudflare static/js scripts/cloudflare tests --ignore-pattern tests/run.php --ignore-pattern tests/init-http-db.php --ignore-pattern tests/http-integration.mjs",
+    "format": "prettier --write cloudflare static/js scripts/cloudflare tests/cloudflare tests/frontend tests/e2e web docs README.md package.json vercel.json .github",
+    "format:check": "prettier --check cloudflare static/js scripts/cloudflare tests/cloudflare tests/frontend tests/e2e web docs README.md package.json vercel.json .github",
+    "test": "npm run build && node --test --test-concurrency=1 tests/cloudflare/*.test.mjs tests/frontend/*.test.mjs",
+    "test:e2e": "playwright test",
+    "audit": "npm audit --audit-level=high",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test && npm run test:e2e"
   },
   "dependencies": {
-    "esbuild": "^0.25.0"
+    "esbuild": "0.28.2"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "latest",
-    "miniflare": "^4.0.0",
-    "typescript": "^5.9.0",
-    "wrangler": "^4.0.0"
+    "@cloudflare/workers-types": "^5.20260921.1",
+    "@eslint/js": "9.39.5",
+    "@playwright/test": "1.63.0",
+    "eslint": "9.39.5",
+    "globals": "16.5.0",
+    "miniflare": "4.20260730.0",
+    "prettier": "3.9.8",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.57.1",
+    "wrangler": "4.115.0"
+  },
+  "overrides": {
+    "sharp": "0.35.4",
+    "undici": "7.29.0"
   }
 }

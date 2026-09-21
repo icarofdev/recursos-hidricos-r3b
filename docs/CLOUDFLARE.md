@@ -1,176 +1,150 @@
-# Publicação na Cloudflare sem VPS
+# Pré-produção: Cloudflare Worker, D1 e Vercel
 
-## 1. Preparação
+Este guia descreve a configuração real do backend no Cloudflare Worker, dos bancos D1 separados e do frontend estático na Vercel. PHP, VPS e MQTT legado não participam deste deploy.
 
-O alvo é Pages em modo avançado (`dist/_worker.js`), com D1 no binding `DB`.
-O HTML/CSS/JS existente é mantido. A raiz do repositório nunca é diretório público.
-Use Node.js 22+, `npm ci` e `npm run check` antes de publicar.
+## 1. Princípios de segurança
 
-Os comandos abaixo são para uma futura publicação autorizada. A migração/testes
-locais não executam nenhum deles automaticamente. Evite ligar integração Git
-antes de conferir as configurações: novos pushes podem gerar deploy automático.
+- Trabalhe em `codex/production-hardening` e valide primeiro um Preview Deployment.
+- Não crie bancos D1 se os IDs configurados já pertencerem à conta correta.
+- Não apague, resete ou semeie bancos remotos com dados de demonstração.
+- Nunca salve secrets em Git, argumentos de CLI ou bundle do frontend. Para validação local, use somente `.dev.vars`, que é ignorado pelo Git, e não compartilhe seu conteúdo.
+- Mantenha `MONITORIE_MODE=unconfigured`, `MAIL_MODE=disabled` e `INGEST_ENABLED=false` até cada integração estar realmente provisionada e validada.
+- Não promova Preview para Production e não faça merge antes da validação remota completa.
 
-## 2. Conta, D1 e migrations
+## 2. Conta Cloudflare e bancos D1
+
+Autentique pelo wrapper do projeto e confirme a conta antes de qualquer alteração:
 
 ```sh
 node scripts/cloudflare/wrangler.mjs login
-node scripts/cloudflare/wrangler.mjs d1 create hidra-r3b
+node scripts/cloudflare/wrangler.mjs whoami
+node scripts/cloudflare/wrangler.mjs d1 list
 ```
 
-Substitua somente `database_id` em `wrangler.toml` pelo ID retornado. O nome e
-binding são `hidra-r3b` / `DB`. O ID não é segredo; o placeholder atual só serve
-ao ambiente local. Inicialize o banco remoto novo:
+O `wrangler.toml` referencia estes recursos:
+
+| Ambiente   | Nome                | ID configurado                         |
+| ---------- | ------------------- | -------------------------------------- |
+| Production | `hidra-r3b`         | `0148ef8b-e4c4-44d1-b188-0dcd159a23db` |
+| Preview    | `hidra-r3b-preview` | `c794e2f5-15ca-4764-af44-58b17b9e225f` |
+
+Compare nome e ID com `d1 list`. Só execute `d1 create` se o recurso estiver ausente ou pertencer a outra conta; nesse caso, atualize apenas o ID correspondente em `wrangler.toml`.
+
+Consulte e aplique migrations sem resetar os bancos:
 
 ```sh
+# Production
+node scripts/cloudflare/wrangler.mjs d1 migrations list DB --remote
 node scripts/cloudflare/wrangler.mjs d1 migrations apply DB --remote
-node scripts/cloudflare/wrangler.mjs pages project create hidra-r3b
+
+# Preview (binding e banco de [env.preview])
+node scripts/cloudflare/wrangler.mjs d1 migrations list DB --remote --env preview
+node scripts/cloudflare/wrangler.mjs d1 migrations apply DB --remote --env preview
 ```
 
-Se o nome Pages já estiver ocupado, use outro e ajuste `name` no TOML. O domínio
-atribuído será `NOME.pages.dev`; não é necessário comprar domínio.
+As migrations versionadas são:
 
-## 3. Secrets e variáveis
+- `0001_initial.sql`: usuários, sessões, dispositivos, reservatórios, SM-WU, rate limits e settings.
+- `0002_admin_devices_smwa.sql`: perfis, administração, ativação, auditoria e SM-WA.
+- `0003_ingestion_retention.sql`: idempotência, retenção e `device_credentials`.
+- `0004_atomic_audit.sql`: auditoria imutável e gatilhos atômicos.
+- `0005_telemetry_cache.sql`: cache/lock de telemetria.
 
-Em Workers & Pages → projeto → Settings → Variables and Secrets, configure os
-ambientes Production e Preview separadamente. Use tipo **Secret** para todas
-as credenciais e dados de remetente. Nunca os salve em `[vars]`, frontend ou Git.
-Também é possível usar o prompt seguro do CLI, por exemplo:
+Depois, consulte `sqlite_master` e o estado de migrations pelos comandos oficiais do Wrangler para confirmar tabelas, índices e triggers. Não altere o schema manualmente.
+
+## 3. Worker: secrets e variáveis
+
+Gere `SESSION_SECRET` e `PASSWORD_PEPPER` de forma criptograficamente aleatória e independente, com pelo menos 32 bytes cada. Digite os valores somente no prompt seguro:
 
 ```sh
-node scripts/cloudflare/wrangler.mjs pages secret put SESSION_SECRET --project-name hidra-r3b
-node scripts/cloudflare/wrangler.mjs pages secret put PASSWORD_PEPPER --project-name hidra-r3b
-node scripts/cloudflare/wrangler.mjs pages secret put BREVO_API_KEY --project-name hidra-r3b
-node scripts/cloudflare/wrangler.mjs pages secret put BREVO_SENDER_EMAIL --project-name hidra-r3b
-node scripts/cloudflare/wrangler.mjs pages secret put BREVO_SENDER_NAME --project-name hidra-r3b
-node scripts/cloudflare/wrangler.mjs pages secret put APP_URL --project-name hidra-r3b
+# Production
+node scripts/cloudflare/wrangler.mjs secret put SESSION_SECRET
+node scripts/cloudflare/wrangler.mjs secret put PASSWORD_PEPPER
+node scripts/cloudflare/wrangler.mjs secret put MONITORIE_JWT
+
+# Preview: secrets independentes
+node scripts/cloudflare/wrangler.mjs secret put SESSION_SECRET --env preview
+node scripts/cloudflare/wrangler.mjs secret put PASSWORD_PEPPER --env preview
+node scripts/cloudflare/wrangler.mjs secret put MONITORIE_JWT --env preview
 ```
 
-| Configuração | Valor esperado |
-| --- | --- |
-| SESSION_SECRET | Aleatório, independente, 32 bytes ou mais |
-| PASSWORD_PEPPER | Outro segredo aleatório, 32 bytes ou mais; preservar junto dos backups |
-| APP_URL | Origem HTTPS pública exata, sem caminho/query, por exemplo o domínio pages.dev atribuído |
-| BREVO_API_KEY | Chave NOVA, revogando as anteriormente expostas |
-| BREVO_SENDER_EMAIL / BREVO_SENDER_NAME | Remetente verificado na Brevo |
-| MONITORIE_BASE_URL / MONITORIE_CREDENTIALS | Somente após especificação real; não habilitam o adaptador por si só |
-| DEVICE_TOKENS | Opcional: objeto JSON de ID → segredo forte de ingestão, se essa função for utilizada |
-| DASHBOARD_SHARE_* | Opcionais: modo somente leitura, descrito abaixo |
+As configurações não secretas ficam em `[vars]` e `[env.preview.vars]` no `wrangler.toml`. Preencha `APP_URL` e `CORS_ORIGINS` somente quando a URL HTTPS estável do frontend correspondente for conhecida; use a origem exata, sem caminho, query, fragmento ou curingas.
 
-Secrets locais em `.dev.vars` são independentes de produção. Não copiar `.env`
-legado e não importar as chaves expostas. Nunca digitar segredos no argumento
-de um comando, em documentos ou no chat. O wrapper Wrangler desativa a leitura
-automática de `.env`; este projeto não usa dotenv no build.
+| Nome                           | Production                          | Preview                          |
+| ------------------------------ | ----------------------------------- | -------------------------------- |
+| `APP_ENV`                      | `production`                        | `preview`                        |
+| `APP_URL`                      | origem exata do frontend Production | origem exata do frontend Preview |
+| `CORS_ORIGINS`                 | mesma origem exata de Production    | mesma origem exata de Preview    |
+| `READINGS_RETENTION_DAYS`      | `90`                                | `90`                             |
+| `AUDIT_RETENTION_DAYS`         | `180`                               | `180`                            |
+| `RETENTION_BATCH_SIZE`         | `500`                               | `500`                            |
+| `MONITORIE_CACHE_SECONDS`      | `60`                                | `60`                             |
+| `DEVICE_OFFLINE_AFTER_SECONDS` | `90`                                | `90`                             |
+| `MONITORIE_MODE`               | `unconfigured`                      | `unconfigured`                   |
+| `MAIL_MODE`                    | `disabled`                          | `disabled`                       |
+| `INGEST_ENABLED`               | `false`                             | `false`                          |
 
-No `wrangler.toml`, manter `APP_ENV=production`, `MONITORIE_MODE=unconfigured`
-até concluir o adaptador, e `MAIL_MODE=disabled` até autorizar envio real.
-Depois de configurar a Brevo, alterar `MAIL_MODE` para `brevo` e republicar.
-O mock só funciona em loopback e é recusado nas URLs de produção/preview.
+`/api/ready` só retorna pronto quando as origens, os dois secrets de autenticação e o D1 estiverem utilizáveis. A aplicação falha fechada se `SESSION_SECRET` ou `PASSWORD_PEPPER` estiver ausente/inválido.
 
-**Brevo/IP:** Workers não oferecem um único IP fixo de saída. A lista restritiva
-de IPs da conta Brevo deve ser desativada ou substituída por configuração que
-aceite Workers. Não cadastrar o IP do computador como solução de produção.
-Revogar TODAS as chaves compartilhadas anteriormente e criar outra diretamente
-no armazenamento de secrets. Nenhuma delas foi reutilizada na migração.
+### Integrações opcionais
 
-## 4. Publicação Pages
+- Brevo: configure `BREVO_API_KEY`, remetente e nome apenas quando houver credenciais reais e remetente verificado; só então altere `MAIL_MODE=brevo` e teste o fluxo completo de redefinição.
+- Monitor IE: o JWT de Account > Security é o secret `MONITORIE_JWT`; nunca o configure como variável pública. O Swagger confirma `X-Authorization`, endpoints de leitura, paginação e timestamps UTC em ms. Descubra UUID/keys com `npm run monitorie:probe -- ...`, configure `MONITORIE_SMWU_MAPPING`/`MONITORIE_SMWA_MAPPING` somente com nomes e unidades confirmados e preserve `MONITORIE_MODE=unconfigured` até a validação. O código não faz login/refresh automático e não usa mock fora do desenvolvimento local; veja `docs/MONITORIE.md`.
+- Ingestão local: não existe secret global `DEVICE_TOKENS` no Worker atual. Tokens são provisionados/rotacionados pelo fluxo administrativo, exibidos uma vez e persistidos somente como hash em `device_credentials`. Habilite `INGEST_ENABLED` apenas para dispositivo `source='local'` real e validado.
+
+## 4. Build e frontend Vercel
+
+O build consome exatamente estas variáveis públicas em build-time:
 
 ```sh
-npm run build
-node scripts/cloudflare/wrangler.mjs pages deploy dist --project-name hidra-r3b
+PUBLIC_API_URL=https://ORIGEM-EXATA-DO-WORKER
+PUBLIC_APP_URL=https://ORIGEM-EXATA-DO-FRONTEND
+npm run build:production
 ```
 
-Para integração Git: comando de build `npm run build`, pasta de saída `dist`,
-Node.js 22+, e binding D1 `DB` conforme TOML. Nunca selecionar a raiz como saída.
-Não usar `wrangler deploy`, que criaria outro produto/domínio; o alvo é Pages.
-Separar D1 e secrets de Preview para não usar dados/recuperação reais em branches.
-Preview pode manter e-mail desativado. Conferir APP_URL antes de enviar mensagens.
+`PUBLIC_API_URL` é gravada em `static/js/config.js`. `PUBLIC_APP_URL` valida a separação entre frontend e API. Ambas devem ser origens HTTPS sem caminho. O build falha se estiverem ausentes, forem iguais, usarem HTTP ou contiverem placeholders inválidos.
 
-Depois da publicação autorizada, validar `/api/health`, cadastro/login/logout,
-cookie Secure, limite de CPU, domínio nos links e um e-mail real autorizado.
-Testes locais não comprovam entregabilidade nem o comportamento da conta Brevo.
+A estratégia autoritativa é o Vercel Build Output API v3:
 
-## 5. Dispositivos e telemetria
+- `scripts/cloudflare/build.mjs` produz `.vercel/output/static` e `.vercel/output/config.json`.
+- `.vercel/output/config.json` contém rotas e os headers, inclusive CSP dinâmica com `connect-src 'self' <PUBLIC_API_URL>`.
+- `vercel.json` define apenas o framework e `npm run build:production`; ele não redefine `outputDirectory`, rotas ou headers.
+- `dist/frontend` é um artefato intermediário para auditoria local e não é a configuração de publicação.
 
-Receber primeiro os itens em [MONITORIE.md](MONITORIE.md), implementar o adaptador
-e cadastrar os IDs confirmados. Código de pareamento local tem validade de 24h:
+Na Vercel, configure `PUBLIC_API_URL` e `PUBLIC_APP_URL` no ambiente Preview da branch `codex/production-hardening`. Não use `API_BASE`. Como a URL automática de Preview pode mudar, prefira um alias HTTPS estável específico da branch e use exatamente esse alias em `PUBLIC_APP_URL`, `APP_URL` e `CORS_ORIGINS`.
+
+## 5. Deploy e validação
+
+Depois de migrations, variáveis e secrets:
 
 ```sh
-node scripts/cloudflare/provision.mjs --id 1 --source monitorie --external-id ID_CONFIRMADO --remote
+npm ci
+npm run typecheck
+npm run lint
+npm run format:check
+npm test
+npm run build:production
+npm run audit
+
+# Worker Production; use --env preview para o Worker Preview
+node scripts/cloudflare/wrangler.mjs deploy
+node scripts/cloudflare/wrangler.mjs deploy --env preview
 ```
 
-O código é gerado aleatoriamente, exibido uma vez ao administrador e armazenado
-apenas como hash. Entregar somente ao proprietário. O script não altera um
-dispositivo vinculado, nem troca fonte/ID externo de um equipamento existente.
-Depois de desvincular, gerar novo código. Não executar seed demo no banco remoto.
+Valide `/api/health` e `/api/ready`, HTTPS, CORS restrito, preflight, ausência de stack traces, headers de segurança e cookies. Quando frontend e API estiverem em sites diferentes, a implementação usa cookie `HttpOnly; Secure; SameSite=None; Partitioned`; em contexto same-site usa `SameSite=Lax`. Todas as chamadas do frontend usam `credentials: include` e mutações continuam protegidas por Origin e CSRF.
 
-Ingestão direta opcional: `INGEST_ENABLED=true`, `DEVICE_TOKENS` como secret,
-`POST /api/device/ingest` com Authorization Bearer ou X-Device-Token em HTTPS.
-Preserva normalização do firmware e faixas do payload antigo. Token na query
-é recusado para evitar registros em URLs. Firmware somente HTTP precisa usar
-a nuvem Monitorie compatível; não depende do antigo gateway com PC ligado.
+O cron atual roda a cada 10 minutos (`*/10 * * * *`) e chama a manutenção em lotes. Os períodos reais são `READINGS_RETENTION_DAYS` e `AUDIT_RETENTION_DAYS`; teste com dados recentes antes de considerar a retenção validada.
 
-Compartilhamento somente leitura é opcional e abrange o projeto inteiro:
-configure os três secrets DASHBOARD_SHARE_USERNAME, DASHBOARD_SHARE_PASSWORD e
-DASHBOARD_SHARE_USER_EMAIL de uma conta existente. O Worker exige HTTP Basic e
-cria sessões de leitura; alterações são rejeitadas mesmo se o cookie for
-reutilizado fora desse modo. Não habilitar se o projeto deve aceitar cadastros.
+## 6. Admin remoto
 
-## 6. Segurança e limites reais do gratuito
+Cadastre o usuário normalmente no ambiente remoto antes da promoção. Depois execute a CLI oficial:
 
-- Sessões aleatórias de 256 bits, somente SHA-256 do identificador no D1;
-  HttpOnly, Secure em HTTPS, SameSite=Lax e prefixo __Host- em produção.
-- Sessão comum: 12h absolutas / 2h sem atividade. Lembrar: 30 dias. Rotação a
-  cada 15 minutos, 30s de tolerância para requisições concorrentes; CSRF estável.
-- Senhas PBKDF2-SHA256 nativo, salt individual, 100.000 iterações e HMAC com pepper
-  obrigatório fora do banco. É o teto documentado do runtime; está abaixo da
-  recomendação OWASP de 600.000 iterações sem essa defesa adicional. Não remover
-  pepper nem reduzir iterações. Mudar o pepper exige recuperação das senhas.
-- O limite gratuito de CPU é 10ms por chamada. O emulador local NÃO aplica esse
-  orçamento da conta. Medir cadastro/login/reset em staging antes de prometer
-  operação gratuita em produção. Se exceder, revisar a arquitetura de identidade
-  (ex.: provedor externo gratuito compatível) ou plano; não enfraquecer o hash.
-- Reset: 256 bits, SHA-256 no banco, 20 minutos, uso único atômico, revoga todas
-  as sessões e tokens. A URL pública é obrigatória, nunca inferida do Host.
-- Respostas de recuperação sempre genéricas; envio assíncrono via waitUntil.
-  Falha remove o token e registra somente um código seguro, nunca o erro bruto.
-- Consultas parametrizadas; autorização D1 antes do cache; sem CORS necessário.
-- Rate limits no D1 por IP/identidade (identificadores HMAC). Em produção somente
-  o header CF-Connecting-IP da borda é usado; não confiar em X-Forwarded-For.
-- Logs de invocação desativados por padrão. Não habilitar coleta de URL/query,
-  corpo ou headers, especialmente nas rotas de recuperação e ingestão.
-- Limpeza de sessões/tokens/rate limits expirados em lotes por hora acionados
-  por visitas às páginas. Leituras locais não são apagadas automaticamente.
-  Fazer exportação/retencão conforme necessidade, sem depender de cron de VPS.
-- D1 gratuito: 500 MB por banco, 5 GB por conta; 5 milhões de linhas lidas/dia e
-  100 mil escritas/dia. Índices também custam escritas. Monitorar métricas reais.
-- 100 mil requisições de Worker/dia são por conta. Cache do Worker reduz chamadas
-  à Monitorie, não elimina invocações do Worker feitas pelo navegador.
+```sh
+node scripts/cloudflare/admin.mjs set-admin icarofranklin0@gmail.com --remote
+```
 
-Tela padrão: snapshot + histórico a cada 60s (até 960 chamadas em 8h por aba,
-mais navegação/autenticação). A estimativa anterior de uma chamada por atualização
-não incluía o histórico. A preferência de 5s aumenta consumo; abas ocultas pausam.
-O plano Free interrompe operações ao alcançar cotas, sem upgrade automático.
-Não foram contratados planos nem serviços pagos.
+Confirme no D1 remoto `users.role='admin'` e o evento `audit_logs.action='admin_promoted'`; teste `/admin` com um usuário comum e com o administrador. Não hardcode conta, senha ou papel no código.
 
-Referências: [Pages avançado](https://developers.cloudflare.com/pages/functions/advanced-mode/),
-[D1 migrations](https://developers.cloudflare.com/d1/reference/migrations/),
-[limites Workers](https://developers.cloudflare.com/workers/platform/limits/),
-[limite PBKDF2](https://github.com/cloudflare/workerd/issues/1346),
-[limites D1](https://developers.cloudflare.com/d1/platform/limits/).
+## 7. Evidências antes do merge
 
-## 7. Dados existentes e rollback
-
-O D1 começa vazio. O banco PHP existente não foi alterado, importado ou apagado.
-Não transportar sessões antigas ou tokens de recuperação. Para migrar contas,
-exportar dados em ambiente seguro, mapear datas para segundos UTC e importar
-usuários/dispositivos/reservatórios/leituras respeitando IDs e vínculos.
-Hashes bcrypt PHP não são convertíveis para o formato novo: usuários importados
-precisarão redefinir a senha (usar hash marcador não autenticável e fluxo de
-recuperação após configurar Brevo). Não pedir nem exportar senhas em texto puro.
-Planejar e validar essa importação contra uma cópia antes de trocar produção.
-
-Arquivos PHP e infraestrutura antiga foram mantidos. Para consultar a versão
-anterior, usar o commit anterior em checkout separado; JS principal agora usa
-as APIs Cloudflare. Não servir a raiz antiga como site de produção.
-Para rollback de uma publicação Cloudflare futura, usar a versão anterior de
-Pages e backup D1 compatível. Não apagar o banco antigo até aceitar a migração.
+Registre sem valores secretos: URLs do Preview, nomes/IDs D1, migrations aplicadas, nomes das variáveis configuradas, resultados da suíte e auditoria, status do GitHub Actions, confirmação do admin remoto e pendências externas de Brevo/MonitorIE. O Preview validado pode ser considerado pronto para merge, mas nunca deve ser promovido ou mesclado sem autorização explícita.

@@ -1,138 +1,129 @@
-# MonitorIE — protocolo confirmado, mapeamento dos medidores pendente
+# Monitor IE — JWT, contrato de leitura e validação
 
-Em 17/09/2026, o suporte da IE Tecnologia forneceu o
-[Swagger oficial](https://monitorie.com.br/swagger-ui.html). A interface e seu
-[OpenAPI JSON](https://monitorie.com.br/v3/api-docs?group=thingsboard) foram
-consultados: ThingsBoard REST API **3.6.4PE**. Isso resolve a descoberta do
-protocolo comum, mas não confirma IDs, keys ou unidades dos SM-WU e SM-WA.
+O backend integra-se à API oficial em `https://monitorie.com.br`. O navegador continua autenticado pela sessão do Hidra e chama somente o Cloudflare Worker; o JWT externo nunca é incluído no frontend, D1, cache, resposta ou log.
 
-## Contrato confirmado e implementação local
+## Contrato confirmado
 
-`cloudflare/monitorie/protocol.ts` contém uma camada de leitura ainda **não
-conectada aos adaptadores de produção**:
+O Swagger oficial em `https://monitorie.com.br/swagger-ui/` identifica a instalação como ThingsBoard Professional Edition `3.6.4PE` e documenta:
 
-| Operação | Método e caminho |
-| --- | --- |
-| Login | `POST /api/auth/login` |
-| Listar keys | `GET /api/plugins/telemetry/DEVICE/{deviceId}/keys/timeseries` |
-| Últimas leituras | `GET /api/plugins/telemetry/DEVICE/{deviceId}/values/timeseries?keys=...&useStrictDataTypes=true` |
-| Histórico | Mesmo caminho, com `keys`, `startTs`, `endTs`, `limit`, `agg=NONE`, `orderBy=ASC`, `useStrictDataTypes=true` |
+| Operação                | Método e caminho                                                 | Observações                                                                                     |
+| ----------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Dispositivos acessíveis | `GET /api/user/devices`                                          | `page` começa em `0`; `pageSize` é obrigatório; resposta `PageData<Device>`                     |
+| Chaves de telemetria    | `GET /api/plugins/telemetry/DEVICE/{deviceId}/keys/timeseries`   | `deviceId` é UUID                                                                               |
+| Últimos valores         | `GET /api/plugins/telemetry/DEVICE/{deviceId}/values/timeseries` | `keys` e `useStrictDataTypes=true`                                                              |
+| Histórico               | mesmo caminho de valores                                         | `keys`, `startTs`, `endTs`, `limit`, `agg=NONE`, `orderBy=ASC`; timestamps UTC em milissegundos |
 
-O login recebe JSON com `username` e `password` e retorna `token` e
-`refreshToken`. O Swagger especifica **`X-Authorization: Bearer <token>`**;
-o texto encaminhado do suporte menciona genericamente Authorization.
-Foi seguido o contrato explícito do Swagger, sem tentar headers alternativos.
+A autenticação confirmada é `X-Authorization: Bearer <JWT>`. O JWT copiado em **Account > Security** é usado diretamente pelo Worker como `MONITORIE_JWT`. O projeto não envia usuário/senha, não usa `Authorization` comum e não implementa login ou refresh automático. Um JWT ausente, expirado, revogado ou sem permissão produz erro controlado e não afeta as contas do Hidra.
 
-Telemetria: objeto cujas propriedades são keys, cada uma contendo um array
-de `{ ts, value }`. `ts`, `startTs` e `endTs` são Unix timestamps em
-**milissegundos UTC**. Cada key conserva seu próprio timestamp. A camada
-não combina medições de horários distintos nem inventa valores ausentes.
-Os valores são preservados até confirmar o mapeamento e suas unidades.
+O cliente aceita somente a origem HTTPS fixa `monitorie.com.br`, rejeita redirects, limita respostas a 1 MiB, usa timeout de 10 segundos e mapeia 401, 403, 404, 429, 5xx, timeout e resposta inválida sem repassar corpo ou detalhes internos.
 
-O histórico usa limite explícito (até 2.000 pontos por key no cliente local).
-Não há cursor/page nesse endpoint documentado. Ao atingir o limite, a camada
-sinaliza `possiblyTruncated`; não apresenta a resposta como histórico completo.
-Retenção, limite máximo aceito pelo servidor e estratégia de paginação temporal
-continuam pendentes de confirmação. Não há loop automático de páginas.
+## Descoberta local sem expor o JWT
 
-O cliente usa destino HTTPS fixo, timeout de 10 segundos, rejeita redirects,
-limita respostas a 1 MiB, valida IDs/keys/timestamps, trata 401/403/429/falhas
-sem revelar corpos ou segredos e não faz retries imediatos. O callback de
-token será fornecido somente por código confiável do Worker; o cliente não
-lê sessão, cookies ou armazenamento do navegador.
+Crie `.dev.vars` localmente (o arquivo é ignorado pelo Git) e preencha o JWT fora da conversa:
 
-O suporte recomenda **no mínimo 60 segundos entre consultas**. A classe
-`D1MonitorieGate` coordena chamadas usando uma reserva atômica na tabela
-`settings` do D1 primário, sem credenciais. Reserva conservadora de 70 segundos
-(60 + timeout de 10), compartilhada por todas as chamadas dessa integração
-que usem o mesmo D1, e respeita `Retry-After` maior. Cache regional sozinho
-não garante essa regra. Ambientes com bancos diferentes não compartilham a
-trava: não ativar consultas simultâneas com a mesma conta em preview e produção
-sem coordenação compartilhada. A trava ainda não é usada por rotas de produção.
+```dotenv
+MONITORIE_JWT=
+MONITORIE_SMWU_MAPPING=
+MONITORIE_SMWA_MAPPING=
+```
 
-## Renovação e secrets pendentes
+Nunca use `VITE_`, `NEXT_PUBLIC_`, `PUBLIC_` ou argumento de linha de comando para o token. O utilitário abaixo lê `.dev.vars`, faz exatamente uma chamada de leitura por execução e não imprime o JWT:
 
-O suporte informou validade de **20 minutos** para o token e recomendou refresh.
-O OpenAPI dessa instância lista `/api/auth/login`, mas não descreve o endpoint
-de refresh. No [vídeo indicado, próximo de 4:10](https://www.youtube.com/watch?v=qoXDIUneo9w&t=250s),
-o trecho inspecionado mostra consulta de telemetria; não foi possível confirmar
-o request de renovação. Solicitar método, caminho, JSON e expiração do refresh
-ao suporte. Não presumir os defaults de outras versões do ThingsBoard.
+No PowerShell, depois de usar **Copy JWT token** na página, salve-o sem exibi-lo e limpe a área de transferência:
 
-`loginMonitorie` implementa apenas o login documentado. Não foi chamado com
-credenciais reais; não há gerenciador automático de sessão ativado. O par de
-tokens retornado deve permanecer exclusivamente no backend, nunca em respostas
-HTTP do Hidra, logs, cache público ou D1 em texto claro. O usuário inserirá as
-credenciais diretamente como secrets do Cloudflare Worker quando essa etapa
-estiver pronta; nenhum segredo foi solicitado ou cadastrado nesta etapa.
+```powershell
+Get-Clipboard | npm --silent run monitorie:store-jwt
+Set-Clipboard -Value ''
+```
 
-Os dois adaptadores de modelo continuam falhando explicitamente com
-`MONITORIE_NOT_CONFIGURED` até confirmar o contrato específico dos equipamentos.
-Nenhum `external_id` ou vínculo de cliente foi alterado.
+Se o navegador usar uma área de transferência isolada, execute `npm run monitorie:store-jwt-browser`, abra somente `http://127.0.0.1:8790/`, cole no campo de senha e salve. O servidor aceita uma única gravação local e encerra em seguida.
 
-## Pedir à IE Tecnologias
+```sh
+npm run monitorie:probe -- devices --page 0
+npm run monitorie:probe -- keys --device-id UUID_CONFIRMADO
+npm run monitorie:probe -- latest --device-id UUID_CONFIRMADO --keys chave1,chave2
+npm run monitorie:probe -- history --device-id UUID_CONFIRMADO --keys chave1,chave2 --hours 24 --limit 500
+```
 
-1. `deviceId` real de cada aparelho instalado, associado ao nome e modelo.
-2. Keys e unidades exatas de cada SM-WU e SM-WA, com exemplos reais sem segredos.
-3. Request exato de refresh: método, endpoint, JSON, escopos e expiração.
-4. Identificador estável de cada equipamento e prova de qual conta pode consultá-lo.
-5. Endpoints de leitura atual, estado/última comunicação e histórico.
-6. Exemplos reais sem segredos: nomes de campos, unidade de distância/volume/nível,
-   formato/fuso de datas e significado dos estados.
-7. Histórico: filtros temporais, ordenação, paginação, tamanho máximo e retenção.
-8. Esclarecer se o mínimo de 60s vale por conta, equipamento ou endpoint;
-   demais cotas, respostas 429, Retry-After e política de IPs.
-9. Confirmar que o SM-WU consegue enviar diretamente para a nuvem contratada.
-   O gateway local do firmware HTTP antigo não fará parte desta implantação.
+Respeite pelo menos 70 segundos entre execuções enquanto o limite informado pelo suporte não for formalmente detalhado. As consultas são somente leitura; não alteram dispositivos, alarmes ou configurações.
 
-## Implementar o contrato interno
+## Mapeamento explícito de chaves e classificação de unidades
 
-`cloudflare/monitorie/adapter.ts` define:
+O Swagger do ThingsBoard (`3.6.4PE`) define a assinatura dos endpoints HTTP, mas **não fornece metadados de unidade ou especificação técnica dos campos de telemetria**. A IE Tecnologia não disponibilizou manual técnico de integração ou datasheet dos firmwares SM-WU e SM-WA.
 
-```ts
-interface MonitorieAdapter {
-  snapshot(scope: TelemetryScope): Promise<Snapshot>;
-  history(scope: TelemetryScope, since: number, limit: number): Promise<Reading[]>;
+Portanto, as unidades configuradas não são formalmente homologadas pelo fornecedor; são classificadas da seguinte forma:
+
+### Classificação de unidades
+
+1. **`vazao` = L/h**: **CONFIGURADA / PROVISÓRIA**.
+   - _Evidência:_ Rótulo visual do widget na tela Técnica do painel web da Monitor IE (`Vazão [L/H]`).
+   - _Ressalva:_ A API retorna apenas o valor numérico (`vazao: 0`), sem confirmação documental de escala ou periodicidade.
+2. **`consumo` = L**: **CONFIGURADA / PROVISÓRIA**.
+   - _Evidência:_ Rótulos visuais no painel web (`Consumido [L]`, `Consumo Acumulado [L]`) e indicação de "consumo em litros" em Relatórios, associado a `ppl = 1` (pulsos por litro).
+   - _Ressalva:_ Não há documento de API confirmando se o valor acumulado é resetado pelo medidor ou se representa litros absolutos.
+3. **`d` = cm**: **CONFIGURADA / PROVISÓRIA**.
+   - _Evidência:_ Coerência física empírica (leitura real `d: 188` com `nivel: 0` condizente com sensor a 188 cm do fundo em reservatório vazio) e contrato legado do sensor ultrassônico.
+   - _Ressalva:_ Nenhuma documentação da IE Tecnologia atesta se a unidade é milímetros (`mm`) ou centímetros (`cm`).
+4. **`nivel` = %**: **CONFIGURADA / PROVISÓRIA**.
+   - _Evidência:_ Coerência com escala percentual de 0 a 100% (`nivel: 0`).
+   - _Ressalva:_ Sem especificação de firmware por escrito.
+5. **`volume` = L**: **CONFIGURADA / PROVISÓRIA**.
+   - _Evidência:_ Contrato canônico de reservatório do sistema R3B.
+   - _Ressalva:_ Sem confirmação se a ThingsBoard calcula volume em litros, m³ ou se depende de calibração geométrica prévia na nuvem.
+6. **Outras chaves (`ppl`, `consumo_delta`)**: **BLOCKED**.
+   - Chaves sem especificação semântica comprovada no contrato permanecem bloqueadas para ingestão.
+
+### Estrutura de configuração
+
+Cada variável de mapping é um objeto JSON. O operador declara a `key` real e a unidade de origem `unit` que o adaptador normaliza para o contrato canônico do frontend:
+
+- SM-WU: `distancia` em `cm`, `nivel` em `%`, `volume` em `L`, `rssi_wifi` em `dBm`.
+- SM-WA: `vazao` em `L/h`, `consumo_acumulado` em `L`, `rssi_wifi` em `dBm`; `volume` em `L` é opcional.
+
+Unidades de origem aceitas:
+
+- distância: `mm`, `cm`, `m`;
+- volume/consumo: `mL`, `cL`, `L`, `m3` ou `m³`;
+- vazão: `L/min`, `L/h`, `m3/h` ou `m³/h`;
+- nível: `%`; sinal: `dBm`.
+
+Estrutura, usando nomes deliberadamente não reais:
+
+```json
+{
+  "vazao": { "key": "CHAVE_CONFIRMADA_DE_VAZAO", "unit": "L/h" },
+  "consumo_acumulado": { "key": "CHAVE_CONFIRMADA_DE_CONSUMO", "unit": "L" },
+  "rssi_wifi": { "key": "CHAVE_CONFIRMADA_DE_RSSI", "unit": "dBm" }
 }
 ```
 
-Isso é o contrato interno do dashboard, **não o contrato da API da Monitorie**.
-O scope contém ID interno, ID externo provisionado pelo administrador, instante
-do vínculo e limiar de offline. Não confiar em ID externo enviado pelo navegador.
-O adaptador real deve mapear os dados documentados, converter unidades/datas,
-aplicar timeout, rejeitar redirecionamentos, limitar tamanho e número de páginas
-e transformar falhas em erros seguros. Nunca retornar credenciais/corpo bruto.
+Chaves desconhecidas, unidades não suportadas, duplicação de key e timestamps sem todos os campos obrigatórios falham fechado com `MONITORIE_NOT_CONFIGURED` ou `MONITORIE_INVALID_DATA`. Uma resposta inteiramente vazia é representada como ausência de medição, nunca como zero. A data retornada pelo provedor alimenta `device.last_seen`, exibida pelo frontend como última atualização; dado antigo mantém o dispositivo offline.
 
-Snapshot: estado online/offline e última comunicação ISO 8601, leitura opcional
-com id, distancia (cm), nivel (%), volume (litros), rssi_wifi (dBm), timestamp.
-Confirmar unidades com a IE antes de implementar qualquer conversão.
-Histórico: no máximo 2.000 registros validados, na janela pedida.
+## Execução ponta a ponta local
 
-O serviço rejeita respostas inválidas e filtra dados anteriores ao vínculo
-atual, inclusive em cache. Isso evita expor leituras do antigo dono quando um
-equipamento troca de conta. O pareamento local continua exigindo código de uso
-único entregue pelo administrador ao proprietário correto.
+Depois de confirmar IDs, keys e unidades, grave os mappings em `.dev.vars`, provisione no D1 local um dispositivo `source='monitorie'` cujo `external_id` seja o UUID confirmado e execute:
 
-## Cache e indisponibilidade
+```sh
+npm run dev:monitorie
+```
 
-- Cache API do Worker, TTL `MONITORIE_CACHE_SECONDS` (60s padrão; 15–3.600).
-- Chave inclui usuário, reservatório, dispositivo, vínculo, fonte e janela.
-- A autorização D1 é validada antes de cada leitura do cache.
-- Cache negativo por 15s para falhas; a conta/renomeação/logout continuam ativos.
-- O cache é regional (por centro de dados), sujeito a remoção antecipada. Não
-  representa uma cota global de uma chamada por minuto; vários centros podem
-  consultar o mesmo equipamento. Solicitações simultâneas em cache frio também
-  podem chegar ao provedor. Conhecer a cota real antes da ativação.
-- Cache de leitura nunca atualiza artificialmente a última comunicação.
-- O histórico permanece na Monitorie; não é duplicado automaticamente no D1.
+Esse modo é opt-in. O `npm run dev` comum continua usando mock local e bloqueia rede externa. O frontend local permanece em `http://127.0.0.1:8788`, chama o Worker em `http://127.0.0.1:8787` e mantém os estados já existentes de carregamento, ausência de dados e erro.
 
-## Desenvolvimento
+O D1 já possui `telemetry_cache` e `settings`; não é necessária migration nova. O cache evita chamadas repetidas e o gate D1 preserva um intervalo global conservador de 70 segundos. Nenhuma leitura da Monitor IE é copiada para as tabelas de ingestão local ou para MySQL legado.
 
-O mock só funciona com `APP_ENV=development`, `MONITORIE_MODE=mock`, acesso por
-localhost/loopback e dispositivo com `source=mock`. URLs públicas recusam a
-configuração simulada; dispositivos `source=monitorie` nunca recebem fallback
-silencioso de dados falsos. A tela local mostra uma faixa de demonstração.
+## Cloudflare Worker
 
-Depois de implementar o protocolo e testar com fixtures anonimizadas, cadastrar
-os IDs reais via script administrativo e validar com a IE. Não converter um
-dispositivo mock em produção nem copiar dados simulados para o D1 publicado.
+Somente depois da validação local e com autorização para alterar o ambiente remoto, insira o JWT pelo prompt seguro:
+
+```sh
+node scripts/cloudflare/wrangler.mjs secret put MONITORIE_JWT
+node scripts/cloudflare/wrangler.mjs secret put MONITORIE_JWT --env preview
+```
+
+Configure os mappings confirmados como bindings do Worker sem colocá-los no frontend. Mantenha `MONITORIE_MODE=unconfigured` até o JWT, o UUID e o mapping do modelo estarem validados; então use `MONITORIE_MODE=live`. Produção e preview devem ter credenciais e D1 separados.
+
+JWTs da página Account > Security expiram. Quando isso ocorrer, copie um novo token e substitua o secret. Não existe renovação automática nesta integração porque esse fluxo não foi solicitado nem comprovado para o token fornecido.
+
+## Pendências para comprovação real
+
+Sem um `MONITORIE_JWT` válido em `.dev.vars`, não é possível provar uma chamada real. Depois do primeiro `devices`, ainda é necessário confirmar qual UUID corresponde fisicamente a cada SM-WU/SM-WA; depois de `keys`/`latest`, confirmar semanticamente cada campo e unidade. Esses são os únicos dados externos restantes para a validação Monitor IE → Worker → frontend.
