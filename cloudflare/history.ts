@@ -52,7 +52,7 @@ export async function history(c: Context, row: ReservoirRow): Promise<Response> 
     device_type: row.device_type,
     count: data.length,
     data,
-    units: telemetryUnits(row.source, row.device_type),
+    units: telemetryUnits(row.source, row.device_type, c.env),
     meta: {
       requested_window: { start: iso(end - hours * 3600), end: iso(end) },
       effective_window: { start: iso(start), end: iso(end) },

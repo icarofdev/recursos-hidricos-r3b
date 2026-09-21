@@ -57,7 +57,7 @@ async function snapshot(c: Context, row: ReservoirRow): Promise<Snapshot> {
   const age =
     result.device.last_seen === null ? Infinity : now() - Date.parse(result.device.last_seen) / 1000;
   if (age >= result.device.offline_after_seconds) result.device.status = 'offline';
-  result.units = telemetryUnits(row.source, row.device_type);
+  result.units = telemetryUnits(row.source, row.device_type, c.env);
   return result;
 }
 

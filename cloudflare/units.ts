@@ -1,6 +1,8 @@
-import type { DeviceType, TelemetryUnits } from './types';
-/** Local WU contract only; MonitorIE and WA vendor units remain unknown. */
-export function telemetryUnits(source: string, type: DeviceType): TelemetryUnits {
+import type { DeviceType, Env, TelemetryUnits } from './types';
+import { monitorieUnits } from './monitorie/mapping';
+
+export function telemetryUnits(source: string, type: DeviceType, env?: Env): TelemetryUnits {
+  if (source === 'monitorie' && env?.MONITORIE_MODE === 'live') return monitorieUnits(type);
   if (source === 'monitorie')
     return {
       distancia: null,

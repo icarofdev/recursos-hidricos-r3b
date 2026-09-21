@@ -33,7 +33,7 @@ test.describe('Painel Administrativo', () => {
 
     // 5. Verificar feedback de sucesso e presença na tabela
     await expect(page.locator('#create-feedback')).toContainText('com sucesso');
-    const deviceRow = page.locator('table.admin-table tbody tr', { hasText: newDeviceCode });
+    const deviceRow = page.locator('#devices-table-body tr', { hasText: newDeviceCode });
     await expect(deviceRow).toBeVisible();
 
     // 6. Gerar código de ativação para o dispositivo recém-criado

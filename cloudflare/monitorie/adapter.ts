@@ -1,7 +1,14 @@
 import type { DeviceType, Env, Reading, SMWAReading, Snapshot } from '../types';
-import { HttpError } from '../http';
+import { monitorieMapping, normalizeMonitorieSeries } from './mapping';
+import {
+  D1MonitorieGate,
+  MonitorieReadClient,
+  monitorieJwt,
+  secondsToTimestampMs,
+  type TelemetrySeries,
+} from './protocol';
 
-/** Contrato INTERNO do Hidra. Não é uma suposição sobre o protocolo da Monitorie. */
+/** Contrato interno do Hidra; o mapping explícito faz a fronteira com as keys da MonitorIE. */
 export interface TelemetryScope {
   deviceId: number;
   deviceType: DeviceType;
@@ -25,49 +32,93 @@ export interface MonitorieAdapter {
   history(scope: TelemetryScope, since: number, limit: number): Promise<(Reading | SMWAReading)[]>;
 }
 
-export class MonitorieSMWUAdapter implements SMWUAdapter {
-  constructor(private readonly env: Env) {}
-  async snapshot(_scope: TelemetryScope): Promise<Snapshot> {
-    return this.unavailable();
+export interface MonitorieTelemetryClient {
+  latest(externalId: string, keys: readonly string[]): Promise<TelemetrySeries>;
+  history(
+    externalId: string,
+    keys: readonly string[],
+    startMs: number,
+    endMs: number,
+    limit: number,
+  ): Promise<{ series: TelemetrySeries; possiblyTruncated: boolean }>;
+}
+
+function status(scope: TelemetryScope, data: Reading | SMWAReading | null): Snapshot {
+  const lastSeen = data?.timestamp ?? null;
+  const age = lastSeen === null ? Infinity : Math.floor((Date.now() - Date.parse(lastSeen)) / 1000);
+  return {
+    device: {
+      id: scope.deviceId,
+      type: scope.deviceType,
+      status: age < scope.offlineAfterSeconds ? 'online' : 'offline',
+      last_seen: lastSeen,
+      offline_after_seconds: scope.offlineAfterSeconds,
+    },
+    data,
+  };
+}
+
+abstract class ModelAdapter {
+  constructor(
+    protected readonly env: Env,
+    protected readonly client: MonitorieTelemetryClient,
+    private readonly type: DeviceType,
+  ) {}
+  protected async current(scope: TelemetryScope): Promise<Snapshot> {
+    const mapping = monitorieMapping(this.env, this.type);
+    const series = await this.client.latest(scope.externalId, mapping.keys);
+    const rows = normalizeMonitorieSeries(series, mapping, scope.deviceId);
+    return status(scope, rows.at(-1) ?? null);
   }
-  async history(_scope: TelemetryScope, _since: number, _limit: number): Promise<Reading[]> {
-    return this.unavailable();
-  }
-  private unavailable(): never {
-    void this.env;
-    throw new HttpError(
-      503,
-      'MONITORIE_NOT_CONFIGURED',
-      'A conexão com a Monitorie para SM-WU ainda não foi configurada. Sua conta continua disponível.',
+  protected async range(
+    scope: TelemetryScope,
+    since: number,
+    limit: number,
+  ): Promise<(Reading | SMWAReading)[]> {
+    const mapping = monitorieMapping(this.env, this.type);
+    const result = await this.client.history(
+      scope.externalId,
+      mapping.keys,
+      secondsToTimestampMs(since),
+      Date.now(),
+      limit,
     );
+    return normalizeMonitorieSeries(result.series, mapping, scope.deviceId);
   }
 }
 
-export class MonitorieSMWAAdapter implements SMWAAdapter {
-  constructor(private readonly env: Env) {}
-  async snapshot(_scope: TelemetryScope): Promise<Snapshot> {
-    return this.unavailable();
+export class MonitorieSMWUAdapter extends ModelAdapter implements SMWUAdapter {
+  constructor(env: Env, client: MonitorieTelemetryClient) {
+    super(env, client, 'SM-WU');
   }
-  async history(_scope: TelemetryScope, _since: number, _limit: number): Promise<SMWAReading[]> {
-    return this.unavailable();
+  async snapshot(scope: TelemetryScope): Promise<Snapshot> {
+    return this.current(scope);
   }
-  private unavailable(): never {
-    void this.env;
-    throw new HttpError(
-      503,
-      'MONITORIE_NOT_CONFIGURED',
-      'A conexão com a Monitorie para SM-WA ainda não foi configurada. Sua conta continua disponível.',
-    );
+  async history(scope: TelemetryScope, since: number, limit: number): Promise<Reading[]> {
+    return (await this.range(scope, since, limit)) as Reading[];
   }
 }
 
-/** Implementar somente após receber a especificação oficial da IE Tecnologias. */
+export class MonitorieSMWAAdapter extends ModelAdapter implements SMWAAdapter {
+  constructor(env: Env, client: MonitorieTelemetryClient) {
+    super(env, client, 'SM-WA');
+  }
+  async snapshot(scope: TelemetryScope): Promise<Snapshot> {
+    return this.current(scope);
+  }
+  async history(scope: TelemetryScope, since: number, limit: number): Promise<SMWAReading[]> {
+    return (await this.range(scope, since, limit)) as SMWAReading[];
+  }
+}
+
 export class MonitorieAPI implements MonitorieAdapter {
   private readonly smwu: MonitorieSMWUAdapter;
   private readonly smwa: MonitorieSMWAAdapter;
-  constructor(private readonly env: Env) {
-    this.smwu = new MonitorieSMWUAdapter(env);
-    this.smwa = new MonitorieSMWAAdapter(env);
+  constructor(env: Env, client?: MonitorieTelemetryClient) {
+    const telemetry =
+      client ?? new MonitorieReadClient(async () => monitorieJwt(env), new D1MonitorieGate(env.DB));
+    this.smwu = new MonitorieSMWUAdapter(env, telemetry);
+    this.smwa = new MonitorieSMWAAdapter(env, telemetry);
   }
   async snapshot(scope: TelemetryScope): Promise<Snapshot> {
     if (scope.deviceType === 'SM-WA') return this.smwa.snapshot(scope);

@@ -11,7 +11,7 @@ const compiled = await build({
   target: 'es2022',
   write: false,
 });
-const { MonitorieReadClient, loginMonitorie, D1MonitorieGate, timestampMsToIso, secondsToTimestampMs } =
+const { MonitorieReadClient, monitorieJwt, D1MonitorieGate, timestampMsToIso, secondsToTimestampMs } =
   await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
 const id = '00000000-0000-4000-8000-000000000001';
 const stamp = 1700000000123;
@@ -27,29 +27,30 @@ const makeGate = () => ({
 });
 const json = (value) => Response.json(value);
 const code = (expected) => (error) => error.code === expected && !error.message.includes('FAKE_SECRET');
+const jwt = (expires) =>
+  `${Buffer.from('{}').toString('base64url')}.${Buffer.from(JSON.stringify({ exp: expires })).toString('base64url')}.signature`;
 
-test('MonitorIE: login documentado envia JSON só ao destino fixo; nenhum segredo real', async () => {
-  const gate = makeGate();
-  const result = await loginMonitorie(
-    { username: 'example@example.test', password: 'FAKE_SECRET' },
-    gate,
-    async (req) => {
-      assert.equal(req.url, 'https://monitorie.com.br/api/auth/login');
-      assert.equal(req.method, 'POST');
-      assert.equal(req.redirect, 'error');
-      assert.deepEqual(await req.json(), { username: 'example@example.test', password: 'FAKE_SECRET' });
-      return json({ token: 'FAKE_ACCESS', refreshToken: 'FAKE_REFRESH' });
-    },
+test('MonitorIE: secret JWT ausente, malformado ou expirado falha fechado sem chamada externa', () => {
+  const now = 1700000000000;
+  assert.throws(
+    () => monitorieJwt({ MONITORIE_MODE: 'unconfigured' }, now),
+    code('MONITORIE_NOT_CONFIGURED'),
   );
-  assert.deepEqual(result, { token: 'FAKE_ACCESS', refreshToken: 'FAKE_REFRESH' });
-  assert.equal(gate.calls, 1);
-  await assert.rejects(
-    loginMonitorie({ username: 'x', password: 'x' }, gate, async () => json({ token: 'x' })),
-    code('MONITORIE_INVALID_DATA'),
+  assert.throws(
+    () => monitorieJwt({ MONITORIE_MODE: 'live', MONITORIE_JWT: 'FAKE_SECRET' }, now),
+    code('MONITORIE_NOT_CONFIGURED'),
+  );
+  assert.throws(
+    () => monitorieJwt({ MONITORIE_MODE: 'live', MONITORIE_JWT: jwt(now / 1000 - 1) }, now),
+    code('MONITORIE_TOKEN_EXPIRED'),
+  );
+  assert.equal(
+    monitorieJwt({ MONITORIE_MODE: 'live', MONITORIE_JWT: jwt(now / 1000 + 3600) }, now),
+    jwt(now / 1000 + 3600),
   );
 });
 
-test('MonitorIE: keys e latest usam DEVICE, X-Authorization e tipos preservados', async () => {
+test('MonitorIE: dispositivos, keys e latest usam somente GET, destino fixo e X-Authorization', async () => {
   const requests = [];
   const gate = makeGate();
   const client = new MonitorieReadClient(
@@ -60,17 +61,32 @@ test('MonitorIE: keys e latest usam DEVICE, X-Authorization e tipos preservados'
       assert.equal(req.headers.get('X-Authorization'), 'Bearer FAKE_ACCESS');
       assert.equal(req.headers.get('Authorization'), null);
       assert.equal(req.method, 'GET');
-      assert.equal(req.redirect, 'error');
+      assert.equal(req.redirect, 'manual');
+      if (req.url.includes('/api/user/devices')) {
+        const query = new URL(req.url).searchParams;
+        assert.equal(query.get('page'), '0');
+        assert.equal(query.get('pageSize'), '100');
+        return json({
+          data: [{ id: { entityType: 'DEVICE', id }, name: 'SM-WA teste', label: null, type: 'default' }],
+          totalPages: 1,
+          totalElements: 1,
+          hasNext: false,
+        });
+      }
       if (req.url.endsWith('/keys/timeseries')) return json(['variavel_teste']);
       assert.equal(new URL(req.url).searchParams.get('keys'), 'variavel_teste');
       assert.equal(new URL(req.url).searchParams.get('useStrictDataTypes'), 'true');
       return json({ variavel_teste: [{ ts: stamp, value: '42.5' }] });
     },
   );
+  assert.deepEqual(
+    (await client.devices()).data.map((device) => device.id),
+    [id],
+  );
   assert.deepEqual(await client.keys(id), ['variavel_teste']);
   assert.equal((await client.latest(id, ['variavel_teste'])).variavel_teste[0].value, '42.5');
-  assert.equal(requests.length, 2);
-  assert.equal(gate.calls, 2);
+  assert.equal(requests.length, 3);
+  assert.equal(gate.calls, 3);
   assert.equal(JSON.stringify(client), '{}');
   assert.equal(timestampMsToIso(stamp), '2023-11-14T22:13:20.123Z');
   assert.equal(secondsToTimestampMs(1700000000), 1700000000000);
@@ -123,8 +139,16 @@ test('MonitorIE: IDs/keys/limites inválidos não disparam chamadas', async () =
   assert.equal(calls, 0);
 });
 
-test('MonitorIE: falhas, resposta excessiva e 429 não vazam conteúdo nem causam retry automático', async () => {
-  for (const status of [401, 403, 404, 429, 500, 302]) {
+test('MonitorIE: 401, 403, 404, 429 e 5xx são controlados e não causam retry automático', async () => {
+  const statuses = new Map([
+    [401, 'MONITORIE_TOKEN_REJECTED'],
+    [403, 'MONITORIE_ACCESS_DENIED'],
+    [404, 'MONITORIE_DEVICE_NOT_FOUND'],
+    [429, 'MONITORIE_RATE_LIMITED'],
+    [500, 'MONITORIE_UNAVAILABLE'],
+    [302, 'MONITORIE_UNAVAILABLE'],
+  ]);
+  for (const [status, expected] of statuses) {
     const gate = makeGate();
     let calls = 0;
     const client = new MonitorieReadClient(
@@ -135,10 +159,7 @@ test('MonitorIE: falhas, resposta excessiva e 429 não vazam conteúdo nem causa
         return new Response('FAKE_SECRET', { status, headers: { 'Retry-After': '120' } });
       },
     );
-    await assert.rejects(
-      client.latest(id, ['x']),
-      (e) => e.status === 503 && !e.message.includes('FAKE_SECRET'),
-    );
+    await assert.rejects(client.latest(id, ['x']), code(expected));
     assert.equal(calls, 1);
     if (status === 429) assert.deepEqual(gate.delays, [120]);
   }
@@ -156,6 +177,23 @@ test('MonitorIE: falhas, resposta excessiva e 429 não vazam conteúdo nem causa
       new MonitorieReadClient(async () => 'FAKE_ACCESS', makeGate(), transport).latest(id, ['x']),
       (e) => e.status === 503 && !e.message.includes('FAKE_SECRET'),
     );
+});
+
+test('MonitorIE: timeout aborta uma única chamada e retorna erro controlado', async () => {
+  let calls = 0;
+  const client = new MonitorieReadClient(
+    async () => 'FAKE_ACCESS',
+    makeGate(),
+    (request) => {
+      calls++;
+      return new Promise((_, reject) =>
+        request.signal.addEventListener('abort', () => reject(new Error('FAKE_SECRET')), { once: true }),
+      );
+    },
+    5,
+  );
+  await assert.rejects(client.latest(id, ['x']), code('MONITORIE_TIMEOUT'));
+  assert.equal(calls, 1);
 });
 
 test('MonitorIE: trava D1 disputa entre instâncias e mantém bloqueio após falha/Retry-After', async () => {

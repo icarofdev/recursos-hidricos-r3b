@@ -36,6 +36,10 @@ test('production build fails closed for missing, equal or malformed origins', ()
   assert.match(config.headers['Content-Security-Policy'], /connect-src 'self' https:\/\/api.test;/);
 });
 test('Vercel artifact carries strict security headers and contains no executable inline attributes', async () => {
+  const project = JSON.parse(await readFile('vercel.json', 'utf8'));
+  assert.equal(project.buildCommand, 'npm run build:production');
+  assert.equal(project.outputDirectory, undefined);
+  assert.equal(project.headers, undefined);
   const config = JSON.parse(await readFile('.vercel/output/config.json', 'utf8'));
   const headers = config.routes[0].headers;
   for (const name of [

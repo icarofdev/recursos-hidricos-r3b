@@ -10,7 +10,7 @@ Navegador → Frontend Estático (Vercel)
                                         → Brevo (recuperação de senha transacional)
 ```
 
-**Estado da Integração Monitorie:** Conexão real depende do fornecimento de dados pela IE Tecnologia (chaves, unidades e endpoint de refresh). O sistema opera em modo **fail-closed** (`MONITORIE_NOT_CONFIGURED`) para dispositivos remotos, e provê um modo `mock` estrito para testes e desenvolvimento local em loopback.
+**Estado da integração Monitor IE:** o contrato REST ThingsBoard 3.6.4 PE e o uso de JWT via `X-Authorization` estão implementados. A ativação real continua **fail-closed** até confirmar, pela consulta read-only, o UUID, as keys e as unidades de cada medidor. O token fica somente em `MONITORIE_JWT`; não há login ou refresh automático.
 
 ---
 
@@ -18,7 +18,8 @@ Navegador → Frontend Estático (Vercel)
 
 1. **Frontend (Vercel):**
    - HTML5 semântico, CSS moderno com variáveis e temas (Claro/Escuro/Auto), JavaScript modular puro (sem frameworks pesados).
-   - Build estático otimizado gerado em `.vercel/output/` e `dist/frontend`.
+   - Build estático otimizado gerado em `dist/frontend` e publicado exclusivamente pelo Build Output API em `.vercel/output/`.
+   - `PUBLIC_API_URL` e `PUBLIC_APP_URL` são obrigatórias no build de produção; a CSP gerada permite `connect-src` somente para a origem HTTPS exata da API.
    - Cabeçalhos estritos de segurança HTTP (CSP, X-Content-Type-Options, Referrer-Policy).
 2. **Backend & API (Cloudflare Worker):**
    - Implementado em TypeScript, empacotado em `dist/worker/index.js`.
@@ -67,6 +68,8 @@ Se preferir rodar os serviços separadamente:
 npm run dev:api       # Inicia somente o Cloudflare Worker local
 npm run dev:frontend  # Inicia somente o servidor frontend local
 ```
+
+Para descobrir dispositivos/keys e validar o fluxo real com um JWT guardado em `.dev.vars`, use `npm run monitorie:probe -- ...` e `npm run dev:monitorie`; consulte [a documentação da Monitor IE](docs/MONITORIE.md). O modo comum continua sem acesso à rede externa.
 
 ### Bootstrap Administrativo
 

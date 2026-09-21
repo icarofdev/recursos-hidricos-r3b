@@ -1,86 +1,105 @@
-# MonitorIE — Protocolo Confirmado e Pendências Técnicas
+# Monitor IE — JWT, contrato de leitura e validação
 
-Este documento descreve o estado atual da integração com a plataforma **MonitorIE** (IE Tecnologia), os componentes implementados e os itens técnicos bloqueantes que dependem de definições do fornecedor.
+O backend integra-se à API oficial em `https://monitorie.com.br`. O navegador continua autenticado pela sessão do Hidra e chama somente o Cloudflare Worker; o JWT externo nunca é incluído no frontend, D1, cache, resposta ou log.
 
----
+## Contrato confirmado
 
-## 1. Estado da Integração: BLOQUEADO (Fail-Closed)
+O Swagger oficial em `https://monitorie.com.br/swagger-ui/` identifica a instalação como ThingsBoard Professional Edition `3.6.4PE` e documenta:
 
-A integração real em produção permanece **bloqueada** aguardando fornecimento de informações contratuais e técnicas pela IE Tecnologia.
+| Operação                | Método e caminho                                                 | Observações                                                                                     |
+| ----------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Dispositivos acessíveis | `GET /api/user/devices`                                          | `page` começa em `0`; `pageSize` é obrigatório; resposta `PageData<Device>`                     |
+| Chaves de telemetria    | `GET /api/plugins/telemetry/DEVICE/{deviceId}/keys/timeseries`   | `deviceId` é UUID                                                                               |
+| Últimos valores         | `GET /api/plugins/telemetry/DEVICE/{deviceId}/values/timeseries` | `keys` e `useStrictDataTypes=true`                                                              |
+| Histórico               | mesmo caminho de valores                                         | `keys`, `startTs`, `endTs`, `limit`, `agg=NONE`, `orderBy=ASC`; timestamps UTC em milissegundos |
 
-- **Comportamento em Produção:** Qualquer tentativa de consulta a dispositivos configurados com `source = 'monitorie'` sem a configuração completa retorna erro seguro `503 Service Unavailable` com o código `MONITORIE_NOT_CONFIGURED`.
-- **Prevenção de Vazamento e Dados Falsos:** Nenhum dado simulado ou inventado é retornado em ambiente de produção.
-- **Ambiente de Testes / Mock:** O modo simulado (`source = 'mock'`) opera estritamente em ambiente local (`ENVIRONMENT === 'local'`), restrito a endereços de loopback (`127.0.0.1`), sendo categoricamente rejeitado em produção e preview.
+A autenticação confirmada é `X-Authorization: Bearer <JWT>`. O JWT copiado em **Account > Security** é usado diretamente pelo Worker como `MONITORIE_JWT`. O projeto não envia usuário/senha, não usa `Authorization` comum e não implementa login ou refresh automático. Um JWT ausente, expirado, revogado ou sem permissão produz erro controlado e não afeta as contas do Hidra.
 
----
+O cliente aceita somente a origem HTTPS fixa `monitorie.com.br`, rejeita redirects, limita respostas a 1 MiB, usa timeout de 10 segundos e mapeia 401, 403, 404, 429, 5xx, timeout e resposta inválida sem repassar corpo ou detalhes internos.
 
-## 2. Protocolo Confirmado (ThingsBoard 3.6.4 PE)
+## Descoberta local sem expor o JWT
 
-Com base no Swagger oficial fornecido pelo suporte (`https://monitorie.com.br/swagger-ui.html`), a API é baseada na plataforma ThingsBoard REST API v3.6.4 PE:
+Crie `.dev.vars` localmente (o arquivo é ignorado pelo Git) e preencha o JWT fora da conversa:
 
-| Ação                        | Método | Endpoint                                                     | Cabeçalhos / Parâmetros                                         |
-| --------------------------- | ------ | ------------------------------------------------------------ | --------------------------------------------------------------- |
-| **Autenticação (Login)**    | `POST` | `/api/auth/login`                                            | JSON `{ "username": "...", "password": "..." }`                 |
-| **Listar Keys Disponíveis** | `GET`  | `/api/plugins/telemetry/DEVICE/{deviceId}/keys/timeseries`   | `X-Authorization: Bearer <token>`                               |
-| **Últimas Leituras**        | `GET`  | `/api/plugins/telemetry/DEVICE/{deviceId}/values/timeseries` | `keys=...&useStrictDataTypes=true`                              |
-| **Série Histórica**         | `GET`  | `/api/plugins/telemetry/DEVICE/{deviceId}/values/timeseries` | `keys=...&startTs=...&endTs=...&limit=...&agg=NONE&orderBy=ASC` |
+```dotenv
+MONITORIE_JWT=
+MONITORIE_SMWU_MAPPING=
+MONITORIE_SMWA_MAPPING=
+```
 
-### Características da Camada de Rede
+Nunca use `VITE_`, `NEXT_PUBLIC_`, `PUBLIC_` ou argumento de linha de comando para o token. O utilitário abaixo lê `.dev.vars`, faz exatamente uma chamada de leitura por execução e não imprime o JWT:
 
-- **Destino Fixo:** Comunicação restrita via HTTPS ao domínio oficial `monitorie.com.br`.
-- **Timeout Rígido:** 10 segundos por requisição com rejeição expressa de redirecionamentos HTTP (evita SSRF).
-- **Limite de Payload:** Limite de 1 MiB por resposta para proteção de memória do Worker.
-- **Formato Temporal:** Timestamps em milissegundos UTC. Os dados retornados preservam a precisão temporal original.
+No PowerShell, depois de usar **Copy JWT token** na página, salve-o sem exibi-lo e limpe a área de transferência:
 
----
+```powershell
+Get-Clipboard | npm --silent run monitorie:store-jwt
+Set-Clipboard -Value ''
+```
 
-## 3. Pendências Críticas a Obter com a IE Tecnologia
+Se o navegador usar uma área de transferência isolada, execute `npm run monitorie:store-jwt-browser`, abra somente `http://127.0.0.1:8790/`, cole no campo de senha e salve. O servidor aceita uma única gravação local e encerra em seguida.
 
-Para desbloquear a implementação do adaptador de produção, os seguintes itens devem ser formalmente respondidos pelo fornecedor:
+```sh
+npm run monitorie:probe -- devices --page 0
+npm run monitorie:probe -- keys --device-id UUID_CONFIRMADO
+npm run monitorie:probe -- latest --device-id UUID_CONFIRMADO --keys chave1,chave2
+npm run monitorie:probe -- history --device-id UUID_CONFIRMADO --keys chave1,chave2 --hours 24 --limit 500
+```
 
-### 1. Endpoint e Mecanismo de Refresh de Token
+Respeite pelo menos 70 segundos entre execuções enquanto o limite informado pelo suporte não for formalmente detalhado. As consultas são somente leitura; não alteram dispositivos, alarmes ou configurações.
 
-- O suporte informou que o token de autenticação expira a cada **20 minutos** e recomendou a utilização de renovação (refresh).
-- O OpenAPI oficial não documenta o endpoint exato de refresh para a versão instalada.
-- **Necessário:** Método HTTP, caminho do endpoint, formato do corpo JSON e tempo de vida do novo token retornado.
+## Mapeamento explícito de chaves e unidades
 
-### 2. Mapeamento de Dispositivos e Hardware
+O Swagger define o envelope de telemetria, mas as keys são criadas pelo firmware. Portanto, o adaptador só entra em operação depois que `devices` e `keys` confirmarem o UUID e os nomes reais. Não há fallback heurístico.
 
-- **Necessário:** Relação exata entre o `deviceId` da API da MonitorIE e o número de série / identificador físico de cada medidor SM-WU e SM-WA instalado.
+Cada variável de mapping é um objeto JSON. Toda chave obrigatória precisa declarar a `key` real e a unidade de origem `unit`; o backend normaliza para o contrato canônico do frontend:
 
-### 3. Nomes de Chaves (Keys) e Unidades de Medida
+- SM-WU: `distancia` em `cm`, `nivel` em `%`, `volume` em `L`, `rssi_wifi` em `dBm`.
+- SM-WA: `vazao` em `L/h`, `consumo_acumulado` em `L`, `rssi_wifi` em `dBm`; `volume` em `L` é opcional.
 
-- O ThingsBoard armazena séries temporais com chaves arbitrárias definidas pelo firmware/dispositivo.
-- **Necessário para o SM-WU (Medidor de Nível / Ultrassom):**
-  - Nome exato da chave de nível/distância e sua unidade de medida (centímetros, milímetros, metros, percentual?).
-  - Fórmulas de calibração ou faixas úteis do sensor ultrassônico.
-  - Chaves de diagnóstico adicionais (bateria, RSSI Wi-Fi, status de sensor).
-- **Necessário para o SM-WA (Medidor de Água / Hidrômetro):**
-  - Nome exato da chave de vazão e unidade (litros/minuto, m³/hora, etc.).
-  - Nome da chave de volume acumulado e unidade (litros ou m³).
-  - Fator de pulso ou resolução métrica do sensor.
+Unidades de origem aceitas:
 
-### 4. Limites de Requisição (Rate Limits) e Cotas
+- distância: `mm`, `cm`, `m`;
+- volume/consumo: `mL`, `cL`, `L`, `m3` ou `m³`;
+- vazão: `L/min`, `L/h`, `m3/h` ou `m³/h`;
+- nível: `%`; sinal: `dBm`.
 
-- O suporte orientou intervalo mínimo de **60 segundos** entre requisições.
-- **Necessário confirmar:**
-  - Se o limite de 60s se aplica por conta de usuário, por dispositivo (`deviceId`) ou por endpoint.
-  - Qual o código e formato de resposta para excesso de requisições (HTTP 429) e se é retornado cabeçalho `Retry-After`.
-  - Se há restrição de IP de saída (Cloudflare Workers utilizam blocos de IPs dinâmicos distribuídos globalmente).
+Estrutura, usando nomes deliberadamente não reais:
 
----
+```json
+{
+  "vazao": { "key": "CHAVE_CONFIRMADA_DE_VAZAO", "unit": "L/h" },
+  "consumo_acumulado": { "key": "CHAVE_CONFIRMADA_DE_CONSUMO", "unit": "L" },
+  "rssi_wifi": { "key": "CHAVE_CONFIRMADA_DE_RSSI", "unit": "dBm" }
+}
+```
 
-## 4. Arquitetura de Cache e Proteção contra Concorrência
+Chaves desconhecidas, unidades não suportadas, duplicação de key e timestamps sem todos os campos obrigatórios falham fechado com `MONITORIE_NOT_CONFIGURED` ou `MONITORIE_INVALID_DATA`. Uma resposta inteiramente vazia é representada como ausência de medição, nunca como zero. A data retornada pelo provedor alimenta `device.last_seen`, exibida pelo frontend como última atualização; dado antigo mantém o dispositivo offline.
 
-Para atender a restrição de 60 segundos do fornecedor e otimizar recursos do Cloudflare Worker:
+## Execução ponta a ponta local
 
-1. **Coordenação Global via D1 (`D1MonitorieGate`):**
-   - Implementado em `cloudflare/monitorie/cache.ts`.
-   - Utiliza lock atômico na tabela `settings` do Cloudflare D1.
-   - Garante espaçamento de 70 segundos entre consultas ao mesmo dispositivo, prevenindo bloqueio por concorrência entre instâncias distintas do Worker.
-2. **Desduplicação Single-Flight em Memória (`SingleFlight`):**
-   - Implementado em `cloudflare/monitorie/single-flight.ts`.
-   - Múltiplas requisições simultâneas ao mesmo dispositivo na mesma instância do Worker compartilham uma única Promise em voo, eliminando chamadas duplicadas ao fornecedor.
-3. **Cache de Snapshots:**
-   - Respostas válidas são cacheadas por 60 segundos.
-   - Falhas temporárias recebem cache negativo de 15 segundos para evitar tempestade de requisições (thundering herd).
+Depois de confirmar IDs, keys e unidades, grave os mappings em `.dev.vars`, provisione no D1 local um dispositivo `source='monitorie'` cujo `external_id` seja o UUID confirmado e execute:
+
+```sh
+npm run dev:monitorie
+```
+
+Esse modo é opt-in. O `npm run dev` comum continua usando mock local e bloqueia rede externa. O frontend local permanece em `http://127.0.0.1:8788`, chama o Worker em `http://127.0.0.1:8787` e mantém os estados já existentes de carregamento, ausência de dados e erro.
+
+O D1 já possui `telemetry_cache` e `settings`; não é necessária migration nova. O cache evita chamadas repetidas e o gate D1 preserva um intervalo global conservador de 70 segundos. Nenhuma leitura da Monitor IE é copiada para as tabelas de ingestão local ou para MySQL legado.
+
+## Cloudflare Worker
+
+Somente depois da validação local e com autorização para alterar o ambiente remoto, insira o JWT pelo prompt seguro:
+
+```sh
+node scripts/cloudflare/wrangler.mjs secret put MONITORIE_JWT
+node scripts/cloudflare/wrangler.mjs secret put MONITORIE_JWT --env preview
+```
+
+Configure os mappings confirmados como bindings do Worker sem colocá-los no frontend. Mantenha `MONITORIE_MODE=unconfigured` até o JWT, o UUID e o mapping do modelo estarem validados; então use `MONITORIE_MODE=live`. Produção e preview devem ter credenciais e D1 separados.
+
+JWTs da página Account > Security expiram. Quando isso ocorrer, copie um novo token e substitua o secret. Não existe renovação automática nesta integração porque esse fluxo não foi solicitado nem comprovado para o token fornecido.
+
+## Pendências para comprovação real
+
+Sem um `MONITORIE_JWT` válido em `.dev.vars`, não é possível provar uma chamada real. Depois do primeiro `devices`, ainda é necessário confirmar qual UUID corresponde fisicamente a cada SM-WU/SM-WA; depois de `keys`/`latest`, confirmar semanticamente cada campo e unidade. Esses são os únicos dados externos restantes para a validação Monitor IE → Worker → frontend.

@@ -2,8 +2,9 @@ import { Miniflare, Log, LogLevel } from 'miniflare';
 import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { unstable_splitSqlQuery } from 'wrangler';
+import { readDevVars } from './dev-vars.mjs';
 
-export async function localRuntime({ port, ephemeral = false } = {}) {
+export async function localRuntime({ port, ephemeral = false, monitorie = false } = {}) {
   await mkdir('.runtime/local', { recursive: true });
   const file = '.runtime/local/secrets.json';
   if (!ephemeral)
@@ -25,6 +26,14 @@ export async function localRuntime({ port, ephemeral = false } = {}) {
         PASSWORD_PEPPER: randomBytes(32).toString('base64url'),
       }
     : JSON.parse(await readFile(file, 'utf8'));
+  const dev = monitorie ? await readDevVars() : {};
+  const monitorieBindings = Object.fromEntries(
+    ['MONITORIE_JWT', 'MONITORIE_SMWU_MAPPING', 'MONITORIE_SMWA_MAPPING']
+      .filter((name) => monitorie && dev[name])
+      .map((name) => [name, dev[name]]),
+  );
+  if (monitorie && !monitorieBindings.MONITORIE_JWT)
+    throw new Error('Configure MONITORIE_JWT em .dev.vars antes de iniciar o modo MonitorIE.');
   const mf = new Miniflare({
     modules: true,
     scriptPath: 'dist/worker/index.js',
@@ -39,13 +48,18 @@ export async function localRuntime({ port, ephemeral = false } = {}) {
       APP_ENV: 'development',
       APP_URL: 'http://127.0.0.1:8788',
       CORS_ORIGINS: 'http://127.0.0.1:8788',
-      MONITORIE_MODE: 'mock',
+      MONITORIE_MODE: monitorie ? 'live' : 'mock',
+      ...monitorieBindings,
       MAIL_MODE: 'disabled',
       INGEST_ENABLED: 'true',
     },
-    outboundService: () => {
-      throw new Error('Rede externa desativada no ambiente local');
-    },
+    ...(monitorie
+      ? {}
+      : {
+          outboundService: () => {
+            throw new Error('Rede externa desativada no ambiente local');
+          },
+        }),
   });
   const db = await mf.getD1Database('DB');
   await db.exec('CREATE TABLE IF NOT EXISTS local_migrations (name TEXT PRIMARY KEY)');

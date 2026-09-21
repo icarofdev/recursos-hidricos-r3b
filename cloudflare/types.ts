@@ -12,8 +12,9 @@ export interface Env {
   BREVO_SENDER_NAME?: string;
   MAIL_MODE?: string;
   MONITORIE_MODE?: string;
-  MONITORIE_BASE_URL?: string;
-  MONITORIE_CREDENTIALS?: string;
+  MONITORIE_JWT?: string;
+  MONITORIE_SMWU_MAPPING?: string;
+  MONITORIE_SMWA_MAPPING?: string;
   MONITORIE_CACHE_SECONDS?: string;
   DEVICE_OFFLINE_AFTER_SECONDS?: string;
   INGEST_ENABLED?: string;

@@ -1,9 +1,12 @@
+import type { Env } from '../types';
 import { HttpError } from '../http';
 
-// Contrato público consultado em 17/09/2026: MonitorIE, ThingsBoard 3.6.4PE.
-// Sem ligação ao dashboard até confirmar IDs, keys, unidades e renovação.
-const ORIGIN = 'https://monitorie.com.br';
+// Swagger oficial consultado em 21/09/2026: MonitorIE / ThingsBoard 3.6.4 PE.
+// O destino e os caminhos são fixos; nenhuma rota aceita URL fornecida pelo navegador.
+export const MONITORIE_ORIGIN = 'https://monitorie.com.br';
 const MAX_BYTES = 1024 * 1024;
+const DEFAULT_TIMEOUT_MS = 10000;
+
 export interface TelemetryPoint {
   ts: number;
   value: unknown;
@@ -15,12 +18,66 @@ export interface RequestGate {
   reserve(): Promise<void>;
   defer(seconds: number): Promise<void>;
 }
+export interface MonitorieDevice {
+  id: string;
+  name: string;
+  label: string | null;
+  type: string;
+}
+export interface MonitorieDevicePage {
+  data: MonitorieDevice[];
+  page: number;
+  totalPages: number;
+  totalElements: number;
+  hasNext: boolean;
+}
+
 const invalid = () => new HttpError(503, 'MONITORIE_INVALID_DATA', 'Resposta inválida da MonitorIE.');
+const notConfigured = () =>
+  new HttpError(503, 'MONITORIE_NOT_CONFIGURED', 'A integração MonitorIE ainda não foi configurada.');
 const badInput = () =>
   new HttpError(503, 'MONITORIE_NOT_CONFIGURED', 'Confirme os identificadores e variáveis da MonitorIE.');
+const timeout = () =>
+  new HttpError(
+    504,
+    'MONITORIE_TIMEOUT',
+    'A MonitorIE demorou para responder. Tente novamente em instantes.',
+  );
+
 function object(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
+function base64UrlJson(value: string): unknown {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) throw notConfigured();
+  try {
+    const base64 = value
+      .replace(/-/g, '+')
+      .replace(/_/g, '/')
+      .padEnd(Math.ceil(value.length / 4) * 4, '=');
+    const bytes = Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
+    return JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes));
+  } catch {
+    throw notConfigured();
+  }
+}
+
+/** Lê o JWT somente do binding secreto do Worker e valida sua expiração sem registrar o valor. */
+export function monitorieJwt(env: Pick<Env, 'MONITORIE_MODE' | 'MONITORIE_JWT'>, time = Date.now()): string {
+  if (env.MONITORIE_MODE !== 'live' || !env.MONITORIE_JWT) throw notConfigured();
+  const token = env.MONITORIE_JWT.trim();
+  const parts = token.split('.');
+  if (token !== env.MONITORIE_JWT || parts.length !== 3 || parts.some((part) => !part)) throw notConfigured();
+  const claims = base64UrlJson(parts[1]);
+  if (!object(claims) || !Number.isSafeInteger(claims.exp) || Number(claims.exp) <= 0) throw notConfigured();
+  if (Number(claims.exp) * 1000 <= time + 30000)
+    throw new HttpError(
+      503,
+      'MONITORIE_TOKEN_EXPIRED',
+      'O JWT da integração MonitorIE expirou. Atualize o secret MONITORIE_JWT.',
+    );
+  return token;
+}
+
 function deviceId(value: string): string {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw badInput();
   return value;
@@ -50,14 +107,15 @@ async function requestJson(
   init: RequestInit,
   gate: RequestGate,
   transport: Transport,
+  timeoutMilliseconds: number,
   maxBytes = MAX_BYTES,
 ): Promise<unknown> {
   await gate.reserve();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 10000);
+  const timer = setTimeout(() => controller.abort(), timeoutMilliseconds);
   try {
     const response = await transport(
-      new Request(ORIGIN + path, { ...init, redirect: 'error', signal: controller.signal }),
+      new Request(MONITORIE_ORIGIN + path, { ...init, redirect: 'manual', signal: controller.signal }),
     );
     if (response.status === 429) {
       const header = response.headers.get('Retry-After');
@@ -71,14 +129,28 @@ async function requestJson(
       await gate.defer(delay);
       throw new HttpError(503, 'MONITORIE_RATE_LIMITED', 'Limite de consultas da MonitorIE. Aguarde.', delay);
     }
-    if (response.status === 401 || response.status === 403)
+    if (response.status === 401)
+      throw new HttpError(
+        503,
+        'MONITORIE_TOKEN_REJECTED',
+        'O JWT da integração MonitorIE foi rejeitado. Atualize o secret MONITORIE_JWT.',
+      );
+    if (response.status === 403)
       throw new HttpError(
         503,
         'MONITORIE_ACCESS_DENIED',
-        'Acesso à MonitorIE indisponível. Verifique a autorização.',
+        'A integração não tem permissão para consultar este recurso da MonitorIE.',
+      );
+    if (response.status === 404)
+      throw new HttpError(
+        503,
+        'MONITORIE_DEVICE_NOT_FOUND',
+        'O dispositivo não foi encontrado ou não está acessível na MonitorIE.',
       );
     if (!response.ok || response.status >= 300)
       throw new HttpError(503, 'MONITORIE_UNAVAILABLE', 'MonitorIE temporariamente indisponível.');
+    const contentLength = Number(response.headers.get('Content-Length'));
+    if (Number.isFinite(contentLength) && contentLength > maxBytes) throw invalid();
     if (!response.headers.get('Content-Type')?.toLowerCase().includes('application/json')) throw invalid();
     const reader = response.body?.getReader();
     if (!reader) throw invalid();
@@ -107,72 +179,98 @@ async function requestJson(
     return JSON.parse(new TextDecoder('utf-8', { fatal: true, ignoreBOM: false }).decode(bytes));
   } catch (error) {
     if (error instanceof HttpError) throw error;
-    // Nunca propagar corpo, URL, senha, JWT ou mensagens do provedor/transport.
+    if (controller.signal.aborted) throw timeout();
+    // Nunca propagar corpo, URL, JWT ou mensagens do provedor/transport.
     throw new HttpError(503, 'MONITORIE_UNAVAILABLE', 'MonitorIE temporariamente indisponível.');
   } finally {
     clearTimeout(timer);
   }
 }
 
-/** Par mantido somente no backend; não retornar em nenhuma rota HTTP do Hidra. */
-export async function loginMonitorie(
-  credentials: { username: string; password: string },
-  gate: RequestGate,
-  transport: Transport = (request) => fetch(request),
-): Promise<{ token: string; refreshToken: string }> {
-  if (!credentials.username || !credentials.password) throw badInput();
-  const data = await requestJson(
-    '/api/auth/login',
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ username: credentials.username, password: credentials.password }),
-    },
-    gate,
-    transport,
-    32768,
-  );
-  if (
-    !object(data) ||
-    typeof data.token !== 'string' ||
-    !data.token ||
-    typeof data.refreshToken !== 'string' ||
-    !data.refreshToken
-  )
-    throw invalid();
-  return { token: data.token, refreshToken: data.refreshToken };
-}
-
-/** Lê somente DEVICE e keys explicitamente provisionadas. Nenhum endpoint de escrita. */
+/** Lê somente recursos documentados no Swagger. Não contém endpoint de escrita nem renovação automática. */
 export class MonitorieReadClient {
   #accessToken: () => Promise<string>;
   #gate: RequestGate;
   #transport: Transport;
+  #timeoutMilliseconds: number;
   constructor(
     accessToken: () => Promise<string>,
     gate: RequestGate,
     transport: Transport = (request) => fetch(request),
+    timeoutMilliseconds = DEFAULT_TIMEOUT_MS,
   ) {
+    if (!Number.isInteger(timeoutMilliseconds) || timeoutMilliseconds < 1 || timeoutMilliseconds > 30000)
+      throw badInput();
     this.#accessToken = accessToken;
     this.#gate = gate;
     this.#transport = transport;
+    this.#timeoutMilliseconds = timeoutMilliseconds;
   }
   async #get(path: string): Promise<unknown> {
     const token = await this.#accessToken();
-    if (!token || /\s/.test(token)) throw badInput();
+    if (!token || /\s/.test(token)) throw notConfigured();
     return requestJson(
       path,
       { method: 'GET', headers: { 'X-Authorization': `Bearer ${token}`, Accept: 'application/json' } },
       this.#gate,
       this.#transport,
+      this.#timeoutMilliseconds,
     );
+  }
+  async devices(page = 0, pageSize = 100): Promise<MonitorieDevicePage> {
+    if (!Number.isInteger(page) || page < 0 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100)
+      throw badInput();
+    const query = new URLSearchParams({
+      page: String(page),
+      pageSize: String(pageSize),
+      sortProperty: 'name',
+      sortOrder: 'ASC',
+    });
+    const value = await this.#get(`/api/user/devices?${query}`);
+    if (
+      !object(value) ||
+      !Array.isArray(value.data) ||
+      value.data.length > pageSize ||
+      !Number.isInteger(value.totalPages) ||
+      Number(value.totalPages) < 0 ||
+      !Number.isInteger(value.totalElements) ||
+      Number(value.totalElements) < 0 ||
+      typeof value.hasNext !== 'boolean'
+    )
+      throw invalid();
+    const data = value.data.map((entry): MonitorieDevice => {
+      if (
+        !object(entry) ||
+        !object(entry.id) ||
+        typeof entry.id.id !== 'string' ||
+        typeof entry.name !== 'string' ||
+        entry.name.length > 255 ||
+        (entry.label !== null && entry.label !== undefined && typeof entry.label !== 'string') ||
+        typeof entry.type !== 'string' ||
+        entry.type.length > 255
+      )
+        throw invalid();
+      return {
+        id: deviceId(entry.id.id),
+        name: entry.name,
+        label: typeof entry.label === 'string' ? entry.label : null,
+        type: entry.type,
+      };
+    });
+    return {
+      data,
+      page,
+      totalPages: Number(value.totalPages),
+      totalElements: Number(value.totalElements),
+      hasNext: value.hasNext,
+    };
   }
   async keys(externalId: string): Promise<string[]> {
     const data = await this.#get(`/api/plugins/telemetry/DEVICE/${deviceId(externalId)}/keys/timeseries`);
     if (
       !Array.isArray(data) ||
       data.length > 1000 ||
-      data.some((key) => typeof key !== 'string' || key.length > 255)
+      data.some((key) => typeof key !== 'string' || !key || key.length > 255 || /[,\x00-\x1f]/.test(key))
     )
       throw invalid();
     return data;
@@ -207,7 +305,7 @@ export class MonitorieReadClient {
       if (points.some((point) => point.ts < startMs || point.ts > endMs)) throw invalid();
       points.sort((a, b) => a.ts - b.ts);
     }
-    // Sem cursor no contrato deste endpoint. Nunca declarar histórico completo ao atingir limit.
+    // O endpoint não oferece cursor; atingir o limite significa histórico possivelmente incompleto.
     return { series, possiblyTruncated: Object.values(series).some((points) => points.length === limit) };
   }
   #series(data: unknown, keys: readonly string[], limit: number): TelemetrySeries {
