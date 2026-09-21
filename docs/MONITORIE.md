@@ -124,6 +124,12 @@ Configure os mappings confirmados como bindings do Worker sem colocá-los no fro
 
 JWTs da página Account > Security expiram. Quando isso ocorrer, copie um novo token e substitua o secret. Não existe renovação automática nesta integração porque esse fluxo não foi solicitado nem comprovado para o token fornecido.
 
-## Pendências para comprovação real
+## Comprovação real concluída em produção
 
-Sem um `MONITORIE_JWT` válido em `.dev.vars`, não é possível provar uma chamada real. Depois do primeiro `devices`, ainda é necessário confirmar qual UUID corresponde fisicamente a cada SM-WU/SM-WA; depois de `keys`/`latest`, confirmar semanticamente cada campo e unidade. Esses são os únicos dados externos restantes para a validação Monitor IE → Worker → frontend.
+A integração real com a Monitor IE foi comprovada e validada ponta a ponta:
+
+- Dispositivo **SM-WU** confirmado com as chaves: `d` (cm), `nivel` (%), `volume` (L) e `rssi_wifi` (dBm).
+- Dispositivo **SM-WA** confirmado com as chaves: `vazao` (L/h), `consumo` (L) e `rssi_wifi` (dBm).
+- As leituras reais retornaram conjuntos completos e timestamps consistentes.
+- `MONITORIE_MODE` configurado para `live` e cache ajustado para 300 segundos.
+- Ingestão direta mantida desabilitada (`INGEST_ENABLED=false`).

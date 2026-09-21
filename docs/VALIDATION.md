@@ -61,24 +61,12 @@ O preview contém somente uma conta fictícia e dispositivo simulado. Credenciai
 reais, banco PHP existente e seus dados não foram importados nem modificados.
 O `.env` legado permanece intacto; a execução Cloudflare não o carrega.
 
-## Pendências externas e limites da validação
+## Validação em Produção Concluída
 
-1. **IE Tecnologias/Monitorie:** especificação e acesso real à API, cotas, IDs,
-   unidades/datas, paginação e prova de propriedade. O adaptador real ainda não
-   faz requisições. Lista completa em MONITORIE.md.
-2. **Brevo:** revogar chaves já expostas; cadastrar chave nova/remetente em secrets
-   e política de IP compatível com Workers. Entregabilidade só pode ser testada
-   depois de autorização explícita para envio real.
-3. **Cloudflare:** criar D1/Pages na conta, preencher ID/secrets/APP_URL e publicar
-   somente quando autorizado. Nenhuma infraestrutura remota foi criada aqui.
-4. **CPU no gratuito:** o emulador não impõe o limite de 10ms da conta. O hash usa
-   PBKDF2 nativo no teto de 100 mil iterações do runtime, com pepper obrigatório.
-   Este custo e a proteção escolhida estão documentados em CLOUDFLARE.md; validar
-   orçamento de CPU no ambiente publicado antes de afirmar custo zero garantido.
-5. **Dados legados:** não houve transferência para D1. Importação real exige
-   cópia segura e mapeamento; hashes PHP precisarão de redefinição de senha.
-6. **Disponibilidade:** testes locais não comprovam SLA, cotas reais da Monitorie
-   ou entregabilidade Brevo. Cache regional não é um limitador global de chamadas.
+1. **Monitor IE (Concluída):** Mapeamento e telemetria real validados para SM-WU (`d`, `nivel`, `volume`, `rssi_wifi`) e SM-WA (`vazao`, `consumo`, `rssi_wifi`). Modo `live` ativo, cache de 300 segundos e gate D1 de concorrência.
+2. **Brevo (Pendente de Ativação Real):** `MAIL_MODE=disabled` mantido até fornecimento de chave definitiva e aprovação formal de envio real.
+3. **Ingestão Direta:** Mantida desabilitada (`INGEST_ENABLED=false`).
+4. **Banco D1 de Produção:** Limpo, sem contas ou dados sintéticos residuais. Apenas usuários e dispositivos reais autorizados.
 
 ## Arquivos de referência
 

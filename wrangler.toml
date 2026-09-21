@@ -4,13 +4,14 @@ compatibility_date = "2026-03-01"
 
 [vars]
 APP_ENV = "production"
-MONITORIE_MODE = "unconfigured"
+MONITORIE_MODE = "live"
 MAIL_MODE = "disabled"
-MONITORIE_CACHE_SECONDS = "60"
+MONITORIE_CACHE_SECONDS = "300"
 DEVICE_OFFLINE_AFTER_SECONDS = "90"
 INGEST_ENABLED = "false"
-CORS_ORIGINS = ""
-APP_URL = ""
+CORS_ORIGINS = "https://hidra-r3b.vercel.app"
+MONITORIE_SMWU_MAPPING = '{"distancia":{"key":"d","unit":"cm"},"nivel":{"key":"nivel","unit":"%"},"volume":{"key":"volume","unit":"L"},"rssi_wifi":{"key":"rssi_wifi","unit":"dBm"}}'
+MONITORIE_SMWA_MAPPING = '{"vazao":{"key":"vazao","unit":"L/h"},"consumo_acumulado":{"key":"consumo","unit":"L"},"rssi_wifi":{"key":"rssi_wifi","unit":"dBm"}}'
 READINGS_RETENTION_DAYS = "90"
 AUDIT_RETENTION_DAYS = "180"
 RETENTION_BATCH_SIZE = "500"

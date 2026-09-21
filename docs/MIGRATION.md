@@ -68,4 +68,4 @@ Novo GET `/api/auth/csrf` inicia uma sessão anônima para clientes que não car
 - A tabela SM-WA antiga permanece no banco original; sua importação é opcional, pois não há endpoint ativo que a utilize.
 - Arquivos PHP permanecem no repositório, marcados como legado, e nunca entram no build Cloudflare.
 
-Implementação e validação local concluídas: consulte [o relatório](VALIDATION.md) e [o guia de publicação](CLOUDFLARE.md).
+Implementação, validação local e integração real em produção concluídas: consulte [o relatório](VALIDATION.md) e [o guia de publicação](CLOUDFLARE.md). A integração com ThingsBoard 3.6.4 PE da Monitor IE opera em modo `live` com cache de 300 segundos e isolamento estrito de dados legados.
