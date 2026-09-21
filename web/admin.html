@@ -1,178 +1,266 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="pt-BR">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Painel administrativo do sistema Hidra R3B para gerenciamento e ativação de dispositivos SM-WU e SM-WA.">
-    <meta name="theme-color" content="#0b2638">
-    <meta name="csrf-token" content="">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Painel administrativo do sistema Hidra R3B para gerenciamento e ativação de dispositivos SM-WU e SM-WA."
+    />
+    <meta name="theme-color" content="#0b2638" />
+    <meta name="csrf-token" content="" />
     <title>Hidra R3B — Painel Administrativo</title>
-    <link rel="stylesheet" href="/static/css/theme.css">
-    <link rel="stylesheet" href="/static/css/dashboard.css">
-    <link rel="stylesheet" href="/static/css/admin.css">
+    <link rel="stylesheet" href="/static/css/theme.css" />
+    <link rel="stylesheet" href="/static/css/dashboard.css" />
+    <link rel="stylesheet" href="/static/css/admin.css" />
     <script src="/static/js/theme.js"></script>
     <script src="/static/js/config.js"></script>
     <script defer src="/static/js/admin.js"></script>
-</head>
-<body>
+  </head>
+  <body>
     <div class="admin-shell">
-        <header class="admin-topbar">
-            <div class="admin-brand">
-                <span class="brand-mark" aria-hidden="true">
-                    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2S5.5 9 5.5 14.5a6.5 6.5 0 0 0 13 0C18.5 9 12 2 12 2Z"/></svg>
-                </span>
-                <div>
-                    <strong>Hidra <b>R3B</b></strong>
-                    <span class="badge-admin">Administração</span>
-                </div>
-            </div>
-            <div class="admin-actions">
-                <div class="theme-selector compact" role="radiogroup" aria-label="Aparência do sistema">
-                    <button type="button" class="theme-option" role="radio" data-theme-value="auto" aria-checked="false" title="Automático (seguir sistema)"><svg class="theme-icon" aria-hidden="true" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg><span>Auto</span></button>
-                    <button type="button" class="theme-option" role="radio" data-theme-value="light" aria-checked="false" title="Tema Claro"><svg class="theme-icon" aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg><span>Claro</span></button>
-                    <button type="button" class="theme-option" role="radio" data-theme-value="dark" aria-checked="false" title="Tema Escuro"><svg class="theme-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z"/></svg><span>Escuro</span></button>
-                </div>
-                <a href="/" class="secondary-button compact-button">Ir para a Dashboard</a>
-                <button type="button" id="admin-logout" class="secondary-button compact-button">Sair</button>
-            </div>
-        </header>
-
-        <main class="admin-container" id="admin-content" hidden>
-            <div class="page-intro">
-                <div>
-                    <h1 class="admin-title">Gestão e Ativação de Dispositivos</h1>
-                    <p class="section-description">Cadastre novos equipamentos SM-WU e SM-WA, gere códigos de ativação para instaladores e controle a titularidade de clientes.</p>
-                </div>
-            </div>
-
-            <!-- Formulário de Cadastro -->
-            <section class="surface admin-card">
-                <h2 class="card-title">Cadastrar Novo Dispositivo</h2>
-                <form id="create-device-form" class="admin-form-grid">
-                    <label class="form-field">
-                        <span>Modelo obrigatório</span>
-                        <select id="device-type" name="device_type" required>
-                            <option value="SM-WU">SM-WU — Medidor de Nível (Reservatórios)</option>
-                            <option value="SM-WA">SM-WA — Medidor de Água (Hidrômetro)</option>
-                        </select>
-                    </label>
-
-                    <label class="form-field">
-                        <span>Identificador / Número de Série conhecido</span>
-                        <input type="text" id="device-code" name="device_code" placeholder="Ex.: SMWU-2026-001" maxlength="64" required autocomplete="off">
-                    </label>
-
-                    <label class="form-field">
-                        <span>External ID da Monitorie</span>
-                        <input type="text" id="external-id" name="external_id" placeholder="Ex.: mon_dev_84729" maxlength="128" autocomplete="off">
-                    </label>
-
-                    <label class="form-field">
-                        <span>Fonte de Telemetria</span>
-                        <select id="device-source" name="source">
-                            <option value="monitorie">Monitorie (Oficial)</option>
-                            <option value="local">Local (Firmware direto)</option>
-                            <option value="mock">Mock (Simulado para testes)</option>
-                        </select>
-                    </label>
-
-                    <div class="form-actions-full">
-                        <button type="submit" class="primary-button" id="btn-create-device">Cadastrar Dispositivo</button>
-                    </div>
-                </form>
-                <p class="form-feedback" id="create-feedback" role="alert"></p>
-            </section>
-
-            <!-- Tabela de Dispositivos Cadastrados -->
-            <section class="surface admin-card">
-                <div class="section-heading">
-                    <div>
-                        <h2 class="card-title">Dispositivos Registrados</h2>
-                        <p class="section-description">Acompanhe situação, proprietários e códigos de ativação pendentes.</p>
-                    </div>
-                    <button type="button" class="secondary-button compact-button" id="btn-refresh-devices">Atualizar lista</button>
-                </div>
-
-                <div class="table-wrapper">
-                    <table class="admin-table">
-                        <thead>
-                            <tr>
-                                <th>Identificador</th>
-                                <th>Modelo</th>
-                                <th>External ID</th>
-                                <th>Status</th>
-                                <th>Proprietário Atual</th>
-                                <th>Código Ativo?</th>
-                                <th>Ações</th>
-                            </tr>
-                        </thead>
-                        <tbody id="devices-table-body">
-                            <tr><td colspan="7" class="table-empty">Carregando dispositivos…</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-
-            <!-- Trilha de Auditoria -->
-            <section class="surface admin-card">
-                <h2 class="card-title">Trilha de Auditoria</h2>
-                <p class="section-description">Registro de eventos imutáveis de cadastro, geração e revogação de códigos, ativação e transferências.</p>
-                <div class="table-wrapper">
-                    <table class="admin-table">
-                        <thead>
-                            <tr>
-                                <th>Data/Hora</th>
-                                <th>Ação</th>
-                                <th>Dispositivo</th>
-                                <th>Autor</th>
-                                <th>IP</th>
-                                <th>Detalhes</th>
-                            </tr>
-                        </thead>
-                        <tbody id="audit-table-body">
-                            <tr><td colspan="6" class="table-empty">Carregando auditoria…</td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </section>
-        </main>
-
-        <div id="admin-unauthorized" class="admin-error-screen" hidden>
-            <h2>Acesso Restrito</h2>
-            <p>Você não tem privilégios administrativos para visualizar este painel.</p>
-            <a href="/" class="primary-button">Voltar à Dashboard</a>
+      <header class="admin-topbar">
+        <div class="admin-brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              width="24"
+              height="24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path d="M12 2S5.5 9 5.5 14.5a6.5 6.5 0 0 0 13 0C18.5 9 12 2 12 2Z" />
+            </svg>
+          </span>
+          <div>
+            <strong>Hidra <b>R3B</b></strong>
+            <span class="badge-admin">Administração</span>
+          </div>
         </div>
+        <div class="admin-actions">
+          <div class="theme-selector compact" role="radiogroup" aria-label="Aparência do sistema">
+            <button
+              type="button"
+              class="theme-option"
+              role="radio"
+              data-theme-value="auto"
+              aria-checked="false"
+              title="Automático (seguir sistema)"
+            >
+              <svg class="theme-icon" aria-hidden="true" viewBox="0 0 24 24">
+                <rect x="2" y="3" width="20" height="14" rx="2" />
+                <path d="M8 21h8M12 17v4" /></svg
+              ><span>Auto</span>
+            </button>
+            <button
+              type="button"
+              class="theme-option"
+              role="radio"
+              data-theme-value="light"
+              aria-checked="false"
+              title="Tema Claro"
+            >
+              <svg class="theme-icon" aria-hidden="true" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="5" />
+                <path
+                  d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"
+                /></svg
+              ><span>Claro</span>
+            </button>
+            <button
+              type="button"
+              class="theme-option"
+              role="radio"
+              data-theme-value="dark"
+              aria-checked="false"
+              title="Tema Escuro"
+            >
+              <svg class="theme-icon" aria-hidden="true" viewBox="0 0 24 24">
+                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" /></svg
+              ><span>Escuro</span>
+            </button>
+          </div>
+          <a href="/" class="secondary-button compact-button">Ir para a Dashboard</a>
+          <button type="button" id="admin-logout" class="secondary-button compact-button">Sair</button>
+        </div>
+      </header>
+
+      <main class="admin-container" id="admin-content" hidden>
+        <div class="page-intro">
+          <div>
+            <h1 class="admin-title">Gestão e Ativação de Dispositivos</h1>
+            <p class="section-description">
+              Cadastre novos equipamentos SM-WU e SM-WA, gere códigos de ativação para instaladores e controle
+              a titularidade de clientes.
+            </p>
+          </div>
+        </div>
+
+        <!-- Formulário de Cadastro -->
+        <section class="surface admin-card">
+          <h2 class="card-title">Cadastrar Novo Dispositivo</h2>
+          <form id="create-device-form" class="admin-form-grid">
+            <label class="form-field">
+              <span>Modelo obrigatório</span>
+              <select id="device-type" name="device_type" required>
+                <option value="SM-WU">SM-WU — Medidor de Nível (Reservatórios)</option>
+                <option value="SM-WA">SM-WA — Medidor de Água (Hidrômetro)</option>
+              </select>
+            </label>
+
+            <label class="form-field">
+              <span>Identificador / Número de Série conhecido</span>
+              <input
+                type="text"
+                id="device-code"
+                name="device_code"
+                placeholder="Ex.: SMWU-2026-001"
+                maxlength="64"
+                required
+                autocomplete="off"
+              />
+            </label>
+
+            <label class="form-field">
+              <span>External ID da Monitorie</span>
+              <input
+                type="text"
+                id="external-id"
+                name="external_id"
+                placeholder="Identificador confirmado pelo fornecedor"
+                maxlength="128"
+                autocomplete="off"
+              />
+            </label>
+
+            <label class="form-field">
+              <span>Fonte de Telemetria</span>
+              <select id="device-source" name="source">
+                <option value="monitorie">Monitorie (Oficial)</option>
+                <option value="local">Local (Firmware direto)</option>
+                <option value="mock">Mock (Simulado para testes)</option>
+              </select>
+            </label>
+
+            <div class="form-actions-full">
+              <button type="submit" class="primary-button" id="btn-create-device">
+                Cadastrar Dispositivo
+              </button>
+            </div>
+          </form>
+          <p class="form-feedback" id="create-feedback" role="alert"></p>
+        </section>
+
+        <!-- Tabela de Dispositivos Cadastrados -->
+        <section class="surface admin-card">
+          <div class="section-heading">
+            <div>
+              <h2 class="card-title">Dispositivos Registrados</h2>
+              <p class="section-description">
+                Acompanhe situação, proprietários e códigos de ativação pendentes.
+              </p>
+            </div>
+            <button type="button" class="secondary-button compact-button" id="btn-refresh-devices">
+              Atualizar lista
+            </button>
+          </div>
+
+          <div class="table-wrapper">
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Identificador</th>
+                  <th>Modelo</th>
+                  <th>External ID</th>
+                  <th>Status</th>
+                  <th>Proprietário Atual</th>
+                  <th>Código Ativo?</th>
+                  <th>Ações</th>
+                </tr>
+              </thead>
+              <tbody id="devices-table-body">
+                <tr>
+                  <td colspan="7" class="table-empty">Carregando dispositivos…</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- Trilha de Auditoria -->
+        <section class="surface admin-card">
+          <h2 class="card-title">Trilha de Auditoria</h2>
+          <p class="section-description">
+            Registro de eventos imutáveis de cadastro, geração e revogação de códigos, ativação e
+            transferências.
+          </p>
+          <div class="table-wrapper">
+            <table class="admin-table">
+              <thead>
+                <tr>
+                  <th>Data/Hora</th>
+                  <th>Ação</th>
+                  <th>Dispositivo</th>
+                  <th>Autor</th>
+                  <th>IP</th>
+                  <th>Detalhes</th>
+                </tr>
+              </thead>
+              <tbody id="audit-table-body">
+                <tr>
+                  <td colspan="6" class="table-empty">Carregando auditoria…</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+
+      <div id="admin-unauthorized" class="admin-error-screen" hidden>
+        <h2>Acesso Restrito</h2>
+        <p>Você não tem privilégios administrativos para visualizar este painel.</p>
+        <a href="/" class="primary-button">Voltar à Dashboard</a>
+      </div>
     </div>
 
     <!-- Modal de Código de Ativação Gerado (Exibição Única) -->
     <div class="modal-backdrop" id="code-modal" hidden>
-        <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="code-modal-title">
-            <h2 id="code-modal-title">Código de Ativação de Uso Único</h2>
-            <div class="warning-callout">
-                <strong>Atenção: Exibição Única!</strong>
-                <p>Por motivos de segurança estrita, este código não é armazenado em texto puro e <strong>nunca mais poderá ser visualizado</strong>. Copie e entregue ao cliente ou instalador credenciado.</p>
-            </div>
-            <div class="activation-code-box">
-                <code id="display-activation-code">HIDRA-••••-••••-••••</code>
-                <button type="button" class="secondary-button compact-button" id="btn-copy-code">Copiar Código</button>
-            </div>
-            <p class="code-expires-text" id="display-code-expires">Expira em: —</p>
-            <div class="modal-actions">
-                <button type="button" class="primary-button" id="btn-close-code-modal">Entendi e Copiei o Código</button>
-            </div>
-        </section>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="code-modal-title">
+        <h2 id="code-modal-title">Código de Ativação de Uso Único</h2>
+        <div class="warning-callout">
+          <strong>Atenção: Exibição Única!</strong>
+          <p>
+            Por motivos de segurança estrita, este código não é armazenado em texto puro e
+            <strong>nunca mais poderá ser visualizado</strong>. Copie e entregue ao cliente ou instalador
+            credenciado.
+          </p>
+        </div>
+        <div class="activation-code-box">
+          <code id="display-activation-code">HIDRA-••••-••••-••••</code>
+          <button type="button" class="secondary-button compact-button" id="btn-copy-code">
+            Copiar Código
+          </button>
+        </div>
+        <p class="code-expires-text" id="display-code-expires">Expira em: —</p>
+        <div class="modal-actions">
+          <button type="button" class="primary-button" id="btn-close-code-modal">
+            Entendi e Copiei o Código
+          </button>
+        </div>
+      </section>
     </div>
 
     <!-- Modal de Confirmação Genérica -->
     <div class="modal-backdrop" id="confirm-modal" hidden>
-        <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
-            <h2 id="confirm-modal-title">Confirmação Administrativa</h2>
-            <p id="confirm-modal-description">Deseja prosseguir com esta operação?</p>
-            <div class="modal-actions">
-                <button type="button" class="secondary-button" id="btn-confirm-cancel">Cancelar</button>
-                <button type="button" class="critical-button" id="btn-confirm-ok">Confirmar Operação</button>
-            </div>
-        </section>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+        <h2 id="confirm-modal-title">Confirmação Administrativa</h2>
+        <p id="confirm-modal-description">Deseja prosseguir com esta operação?</p>
+        <div class="modal-actions">
+          <button type="button" class="secondary-button" id="btn-confirm-cancel">Cancelar</button>
+          <button type="button" class="critical-button" id="btn-confirm-ok">Confirmar Operação</button>
+        </div>
+      </section>
     </div>
-</body>
+  </body>
 </html>

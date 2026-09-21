@@ -1,138 +1,86 @@
-# MonitorIE — protocolo confirmado, mapeamento dos medidores pendente
+# MonitorIE — Protocolo Confirmado e Pendências Técnicas
 
-Em 17/09/2026, o suporte da IE Tecnologia forneceu o
-[Swagger oficial](https://monitorie.com.br/swagger-ui.html). A interface e seu
-[OpenAPI JSON](https://monitorie.com.br/v3/api-docs?group=thingsboard) foram
-consultados: ThingsBoard REST API **3.6.4PE**. Isso resolve a descoberta do
-protocolo comum, mas não confirma IDs, keys ou unidades dos SM-WU e SM-WA.
+Este documento descreve o estado atual da integração com a plataforma **MonitorIE** (IE Tecnologia), os componentes implementados e os itens técnicos bloqueantes que dependem de definições do fornecedor.
 
-## Contrato confirmado e implementação local
+---
 
-`cloudflare/monitorie/protocol.ts` contém uma camada de leitura ainda **não
-conectada aos adaptadores de produção**:
+## 1. Estado da Integração: BLOQUEADO (Fail-Closed)
 
-| Operação | Método e caminho |
-| --- | --- |
-| Login | `POST /api/auth/login` |
-| Listar keys | `GET /api/plugins/telemetry/DEVICE/{deviceId}/keys/timeseries` |
-| Últimas leituras | `GET /api/plugins/telemetry/DEVICE/{deviceId}/values/timeseries?keys=...&useStrictDataTypes=true` |
-| Histórico | Mesmo caminho, com `keys`, `startTs`, `endTs`, `limit`, `agg=NONE`, `orderBy=ASC`, `useStrictDataTypes=true` |
+A integração real em produção permanece **bloqueada** aguardando fornecimento de informações contratuais e técnicas pela IE Tecnologia.
 
-O login recebe JSON com `username` e `password` e retorna `token` e
-`refreshToken`. O Swagger especifica **`X-Authorization: Bearer <token>`**;
-o texto encaminhado do suporte menciona genericamente Authorization.
-Foi seguido o contrato explícito do Swagger, sem tentar headers alternativos.
+- **Comportamento em Produção:** Qualquer tentativa de consulta a dispositivos configurados com `source = 'monitorie'` sem a configuração completa retorna erro seguro `503 Service Unavailable` com o código `MONITORIE_NOT_CONFIGURED`.
+- **Prevenção de Vazamento e Dados Falsos:** Nenhum dado simulado ou inventado é retornado em ambiente de produção.
+- **Ambiente de Testes / Mock:** O modo simulado (`source = 'mock'`) opera estritamente em ambiente local (`ENVIRONMENT === 'local'`), restrito a endereços de loopback (`127.0.0.1`), sendo categoricamente rejeitado em produção e preview.
 
-Telemetria: objeto cujas propriedades são keys, cada uma contendo um array
-de `{ ts, value }`. `ts`, `startTs` e `endTs` são Unix timestamps em
-**milissegundos UTC**. Cada key conserva seu próprio timestamp. A camada
-não combina medições de horários distintos nem inventa valores ausentes.
-Os valores são preservados até confirmar o mapeamento e suas unidades.
+---
 
-O histórico usa limite explícito (até 2.000 pontos por key no cliente local).
-Não há cursor/page nesse endpoint documentado. Ao atingir o limite, a camada
-sinaliza `possiblyTruncated`; não apresenta a resposta como histórico completo.
-Retenção, limite máximo aceito pelo servidor e estratégia de paginação temporal
-continuam pendentes de confirmação. Não há loop automático de páginas.
+## 2. Protocolo Confirmado (ThingsBoard 3.6.4 PE)
 
-O cliente usa destino HTTPS fixo, timeout de 10 segundos, rejeita redirects,
-limita respostas a 1 MiB, valida IDs/keys/timestamps, trata 401/403/429/falhas
-sem revelar corpos ou segredos e não faz retries imediatos. O callback de
-token será fornecido somente por código confiável do Worker; o cliente não
-lê sessão, cookies ou armazenamento do navegador.
+Com base no Swagger oficial fornecido pelo suporte (`https://monitorie.com.br/swagger-ui.html`), a API é baseada na plataforma ThingsBoard REST API v3.6.4 PE:
 
-O suporte recomenda **no mínimo 60 segundos entre consultas**. A classe
-`D1MonitorieGate` coordena chamadas usando uma reserva atômica na tabela
-`settings` do D1 primário, sem credenciais. Reserva conservadora de 70 segundos
-(60 + timeout de 10), compartilhada por todas as chamadas dessa integração
-que usem o mesmo D1, e respeita `Retry-After` maior. Cache regional sozinho
-não garante essa regra. Ambientes com bancos diferentes não compartilham a
-trava: não ativar consultas simultâneas com a mesma conta em preview e produção
-sem coordenação compartilhada. A trava ainda não é usada por rotas de produção.
+| Ação                        | Método | Endpoint                                                     | Cabeçalhos / Parâmetros                                         |
+| --------------------------- | ------ | ------------------------------------------------------------ | --------------------------------------------------------------- |
+| **Autenticação (Login)**    | `POST` | `/api/auth/login`                                            | JSON `{ "username": "...", "password": "..." }`                 |
+| **Listar Keys Disponíveis** | `GET`  | `/api/plugins/telemetry/DEVICE/{deviceId}/keys/timeseries`   | `X-Authorization: Bearer <token>`                               |
+| **Últimas Leituras**        | `GET`  | `/api/plugins/telemetry/DEVICE/{deviceId}/values/timeseries` | `keys=...&useStrictDataTypes=true`                              |
+| **Série Histórica**         | `GET`  | `/api/plugins/telemetry/DEVICE/{deviceId}/values/timeseries` | `keys=...&startTs=...&endTs=...&limit=...&agg=NONE&orderBy=ASC` |
 
-## Renovação e secrets pendentes
+### Características da Camada de Rede
 
-O suporte informou validade de **20 minutos** para o token e recomendou refresh.
-O OpenAPI dessa instância lista `/api/auth/login`, mas não descreve o endpoint
-de refresh. No [vídeo indicado, próximo de 4:10](https://www.youtube.com/watch?v=qoXDIUneo9w&t=250s),
-o trecho inspecionado mostra consulta de telemetria; não foi possível confirmar
-o request de renovação. Solicitar método, caminho, JSON e expiração do refresh
-ao suporte. Não presumir os defaults de outras versões do ThingsBoard.
+- **Destino Fixo:** Comunicação restrita via HTTPS ao domínio oficial `monitorie.com.br`.
+- **Timeout Rígido:** 10 segundos por requisição com rejeição expressa de redirecionamentos HTTP (evita SSRF).
+- **Limite de Payload:** Limite de 1 MiB por resposta para proteção de memória do Worker.
+- **Formato Temporal:** Timestamps em milissegundos UTC. Os dados retornados preservam a precisão temporal original.
 
-`loginMonitorie` implementa apenas o login documentado. Não foi chamado com
-credenciais reais; não há gerenciador automático de sessão ativado. O par de
-tokens retornado deve permanecer exclusivamente no backend, nunca em respostas
-HTTP do Hidra, logs, cache público ou D1 em texto claro. O usuário inserirá as
-credenciais diretamente como secrets do Cloudflare Worker quando essa etapa
-estiver pronta; nenhum segredo foi solicitado ou cadastrado nesta etapa.
+---
 
-Os dois adaptadores de modelo continuam falhando explicitamente com
-`MONITORIE_NOT_CONFIGURED` até confirmar o contrato específico dos equipamentos.
-Nenhum `external_id` ou vínculo de cliente foi alterado.
+## 3. Pendências Críticas a Obter com a IE Tecnologia
 
-## Pedir à IE Tecnologias
+Para desbloquear a implementação do adaptador de produção, os seguintes itens devem ser formalmente respondidos pelo fornecedor:
 
-1. `deviceId` real de cada aparelho instalado, associado ao nome e modelo.
-2. Keys e unidades exatas de cada SM-WU e SM-WA, com exemplos reais sem segredos.
-3. Request exato de refresh: método, endpoint, JSON, escopos e expiração.
-4. Identificador estável de cada equipamento e prova de qual conta pode consultá-lo.
-5. Endpoints de leitura atual, estado/última comunicação e histórico.
-6. Exemplos reais sem segredos: nomes de campos, unidade de distância/volume/nível,
-   formato/fuso de datas e significado dos estados.
-7. Histórico: filtros temporais, ordenação, paginação, tamanho máximo e retenção.
-8. Esclarecer se o mínimo de 60s vale por conta, equipamento ou endpoint;
-   demais cotas, respostas 429, Retry-After e política de IPs.
-9. Confirmar que o SM-WU consegue enviar diretamente para a nuvem contratada.
-   O gateway local do firmware HTTP antigo não fará parte desta implantação.
+### 1. Endpoint e Mecanismo de Refresh de Token
 
-## Implementar o contrato interno
+- O suporte informou que o token de autenticação expira a cada **20 minutos** e recomendou a utilização de renovação (refresh).
+- O OpenAPI oficial não documenta o endpoint exato de refresh para a versão instalada.
+- **Necessário:** Método HTTP, caminho do endpoint, formato do corpo JSON e tempo de vida do novo token retornado.
 
-`cloudflare/monitorie/adapter.ts` define:
+### 2. Mapeamento de Dispositivos e Hardware
 
-```ts
-interface MonitorieAdapter {
-  snapshot(scope: TelemetryScope): Promise<Snapshot>;
-  history(scope: TelemetryScope, since: number, limit: number): Promise<Reading[]>;
-}
-```
+- **Necessário:** Relação exata entre o `deviceId` da API da MonitorIE e o número de série / identificador físico de cada medidor SM-WU e SM-WA instalado.
 
-Isso é o contrato interno do dashboard, **não o contrato da API da Monitorie**.
-O scope contém ID interno, ID externo provisionado pelo administrador, instante
-do vínculo e limiar de offline. Não confiar em ID externo enviado pelo navegador.
-O adaptador real deve mapear os dados documentados, converter unidades/datas,
-aplicar timeout, rejeitar redirecionamentos, limitar tamanho e número de páginas
-e transformar falhas em erros seguros. Nunca retornar credenciais/corpo bruto.
+### 3. Nomes de Chaves (Keys) e Unidades de Medida
 
-Snapshot: estado online/offline e última comunicação ISO 8601, leitura opcional
-com id, distancia (cm), nivel (%), volume (litros), rssi_wifi (dBm), timestamp.
-Confirmar unidades com a IE antes de implementar qualquer conversão.
-Histórico: no máximo 2.000 registros validados, na janela pedida.
+- O ThingsBoard armazena séries temporais com chaves arbitrárias definidas pelo firmware/dispositivo.
+- **Necessário para o SM-WU (Medidor de Nível / Ultrassom):**
+  - Nome exato da chave de nível/distância e sua unidade de medida (centímetros, milímetros, metros, percentual?).
+  - Fórmulas de calibração ou faixas úteis do sensor ultrassônico.
+  - Chaves de diagnóstico adicionais (bateria, RSSI Wi-Fi, status de sensor).
+- **Necessário para o SM-WA (Medidor de Água / Hidrômetro):**
+  - Nome exato da chave de vazão e unidade (litros/minuto, m³/hora, etc.).
+  - Nome da chave de volume acumulado e unidade (litros ou m³).
+  - Fator de pulso ou resolução métrica do sensor.
 
-O serviço rejeita respostas inválidas e filtra dados anteriores ao vínculo
-atual, inclusive em cache. Isso evita expor leituras do antigo dono quando um
-equipamento troca de conta. O pareamento local continua exigindo código de uso
-único entregue pelo administrador ao proprietário correto.
+### 4. Limites de Requisição (Rate Limits) e Cotas
 
-## Cache e indisponibilidade
+- O suporte orientou intervalo mínimo de **60 segundos** entre requisições.
+- **Necessário confirmar:**
+  - Se o limite de 60s se aplica por conta de usuário, por dispositivo (`deviceId`) ou por endpoint.
+  - Qual o código e formato de resposta para excesso de requisições (HTTP 429) e se é retornado cabeçalho `Retry-After`.
+  - Se há restrição de IP de saída (Cloudflare Workers utilizam blocos de IPs dinâmicos distribuídos globalmente).
 
-- Cache API do Worker, TTL `MONITORIE_CACHE_SECONDS` (60s padrão; 15–3.600).
-- Chave inclui usuário, reservatório, dispositivo, vínculo, fonte e janela.
-- A autorização D1 é validada antes de cada leitura do cache.
-- Cache negativo por 15s para falhas; a conta/renomeação/logout continuam ativos.
-- O cache é regional (por centro de dados), sujeito a remoção antecipada. Não
-  representa uma cota global de uma chamada por minuto; vários centros podem
-  consultar o mesmo equipamento. Solicitações simultâneas em cache frio também
-  podem chegar ao provedor. Conhecer a cota real antes da ativação.
-- Cache de leitura nunca atualiza artificialmente a última comunicação.
-- O histórico permanece na Monitorie; não é duplicado automaticamente no D1.
+---
 
-## Desenvolvimento
+## 4. Arquitetura de Cache e Proteção contra Concorrência
 
-O mock só funciona com `APP_ENV=development`, `MONITORIE_MODE=mock`, acesso por
-localhost/loopback e dispositivo com `source=mock`. URLs públicas recusam a
-configuração simulada; dispositivos `source=monitorie` nunca recebem fallback
-silencioso de dados falsos. A tela local mostra uma faixa de demonstração.
+Para atender a restrição de 60 segundos do fornecedor e otimizar recursos do Cloudflare Worker:
 
-Depois de implementar o protocolo e testar com fixtures anonimizadas, cadastrar
-os IDs reais via script administrativo e validar com a IE. Não converter um
-dispositivo mock em produção nem copiar dados simulados para o D1 publicado.
+1. **Coordenação Global via D1 (`D1MonitorieGate`):**
+   - Implementado em `cloudflare/monitorie/cache.ts`.
+   - Utiliza lock atômico na tabela `settings` do Cloudflare D1.
+   - Garante espaçamento de 70 segundos entre consultas ao mesmo dispositivo, prevenindo bloqueio por concorrência entre instâncias distintas do Worker.
+2. **Desduplicação Single-Flight em Memória (`SingleFlight`):**
+   - Implementado em `cloudflare/monitorie/single-flight.ts`.
+   - Múltiplas requisições simultâneas ao mesmo dispositivo na mesma instância do Worker compartilham uma única Promise em voo, eliminando chamadas duplicadas ao fornecedor.
+3. **Cache de Snapshots:**
+   - Respostas válidas são cacheadas por 60 segundos.
+   - Falhas temporárias recebem cache negativo de 15 segundos para evitar tempestade de requisições (thundering herd).

@@ -14,23 +14,30 @@ if (command !== 'set-admin' || !email) {
 }
 
 const cleanEmail = email.replace(/'/g, "''");
-const sql = `UPDATE users SET role='admin' WHERE lower(email)='${cleanEmail}' RETURNING id, email, role;`;
+const sql = `UPDATE users SET role='admin' WHERE lower(email)='${cleanEmail}' RETURNING id, email, role;
+INSERT INTO audit_logs(action, device_id, user_id, details, created_at)
+SELECT 'admin_promoted', NULL, id, json_object('method', 'cli_bootstrap'), unixepoch()
+FROM users WHERE lower(email)='${cleanEmail}';`;
 const wranglerArgs = ['d1', 'execute', 'hidra-r3b', '--command', sql, '--json'];
 if (isRemote) wranglerArgs.push('--remote');
 
 const child = spawn(process.execPath, [cli, ...wranglerArgs], {
   stdio: ['inherit', 'pipe', 'pipe'],
   windowsHide: true,
-  env: { ...process.env, NODE_OPTIONS: '--dns-result-order=ipv4first' }
+  env: { ...process.env, NODE_OPTIONS: '--dns-result-order=ipv4first' },
 });
 
 let stdout = '';
 let stderr = '';
 
-child.stdout.on('data', chunk => { stdout += chunk.toString('utf8'); });
-child.stderr.on('data', chunk => { stderr += chunk.toString('utf8'); });
+child.stdout.on('data', (chunk) => {
+  stdout += chunk.toString('utf8');
+});
+child.stderr.on('data', (chunk) => {
+  stderr += chunk.toString('utf8');
+});
 
-child.on('exit', code => {
+child.on('exit', (code) => {
   if (code !== 0) {
     if (stderr.trim()) console.error(stderr);
     else if (stdout.trim()) console.error(stdout);
@@ -54,7 +61,9 @@ child.on('exit', code => {
     }
 
     const updated = results[0];
-    console.log(`Usuário ${updated.email} promovido a admin com sucesso (ID: ${updated.id}, role: ${updated.role}).`);
+    console.log(
+      `Usuário ${updated.email} promovido a admin com sucesso (ID: ${updated.id}, role: ${updated.role}).`,
+    );
     process.exit(0);
   } catch (err) {
     console.error('Erro ao interpretar resultado do D1:', err.message);

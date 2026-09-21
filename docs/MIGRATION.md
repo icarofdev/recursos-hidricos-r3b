@@ -11,35 +11,35 @@ Inventário realizado antes da implementação. `git status --short` estava vazi
 
 ## Páginas
 
-| Origem PHP | Rota preservada | Destino |
-| --- | --- | --- |
-| index.php | / | Template HTML protegido pelo Worker |
-| login.php | /login | Template HTML |
-| register.php | /cadastro | Template HTML |
-| forgot-password.php | /esqueci-senha | Template HTML |
-| reset-password.php | /redefinir-senha | Template HTML |
+| Origem PHP          | Rota preservada  | Destino                             |
+| ------------------- | ---------------- | ----------------------------------- |
+| index.php           | /                | Template HTML protegido pelo Worker |
+| login.php           | /login           | Template HTML                       |
+| register.php        | /cadastro        | Template HTML                       |
+| forgot-password.php | /esqueci-senha   | Template HTML                       |
+| reset-password.php  | /redefinir-senha | Template HTML                       |
 
 ## Todos os endpoints
 
-| Endpoint antigo | Endpoint Cloudflare | Regra |
-| --- | --- | --- |
-| POST /api/auth/register.php | POST /api/auth/register | Cadastro, sessão nova, CSRF, rate limit |
-| POST /api/auth/login.php | POST /api/auth/login | Login e lembrar de mim |
-| POST /api/auth/logout.php | POST /api/auth/logout | Revogação da sessão |
-| GET /api/auth/me.php | GET /api/auth/me | Usuário e CSRF da sessão |
-| POST /api/auth/forgot-password.php | POST /api/auth/forgot-password | Resposta genérica, Brevo |
-| GET/POST /api/auth/reset-password.php | GET/POST /api/auth/reset-password | Validação/consumo atômico do token |
-| GET /api/reservoirs/index.php | GET /api/reservoirs | Somente reservatórios próprios |
-| POST /api/reservoirs/rename.php | POST /api/reservoirs/rename | Nome com até 60 caracteres |
-| POST /api/devices/validate-pairing.php | POST /api/devices/validate-pairing | Código secreto com expiração |
-| POST /api/devices/connect.php | POST /api/devices/connect | Reivindicação atômica |
-| POST /api/devices/unlink.php | POST /api/devices/unlink | Preserva histórico, invalida pareamento |
-| GET /api/device/current.php | GET /api/device/current | Última leitura autorizada |
-| GET /api/device/history.php | GET /api/device/history | Histórico autorizado, horas/limite validados |
-| GET /api/device/status.php | GET /api/device/status | Estado autorizado |
-| GET /api/device/alerts.php | GET /api/device/alerts | Offline, nível <20 crítico e <40 baixo |
-| POST /api/device/ingest.php | POST /api/device/ingest | Ingestão HTTPS opcional, segredo por dispositivo |
-| GET /health.php, /api/health.php | GET /api/health | Saúde do D1, sem detalhes internos |
+| Endpoint antigo                        | Endpoint Cloudflare                | Regra                                            |
+| -------------------------------------- | ---------------------------------- | ------------------------------------------------ |
+| POST /api/auth/register.php            | POST /api/auth/register            | Cadastro, sessão nova, CSRF, rate limit          |
+| POST /api/auth/login.php               | POST /api/auth/login               | Login e lembrar de mim                           |
+| POST /api/auth/logout.php              | POST /api/auth/logout              | Revogação da sessão                              |
+| GET /api/auth/me.php                   | GET /api/auth/me                   | Usuário e CSRF da sessão                         |
+| POST /api/auth/forgot-password.php     | POST /api/auth/forgot-password     | Resposta genérica, Brevo                         |
+| GET/POST /api/auth/reset-password.php  | GET/POST /api/auth/reset-password  | Validação/consumo atômico do token               |
+| GET /api/reservoirs/index.php          | GET /api/reservoirs                | Somente reservatórios próprios                   |
+| POST /api/reservoirs/rename.php        | POST /api/reservoirs/rename        | Nome com até 60 caracteres                       |
+| POST /api/devices/validate-pairing.php | POST /api/devices/validate-pairing | Código secreto com expiração                     |
+| POST /api/devices/connect.php          | POST /api/devices/connect          | Reivindicação atômica                            |
+| POST /api/devices/unlink.php           | POST /api/devices/unlink           | Preserva histórico, invalida pareamento          |
+| GET /api/device/current.php            | GET /api/device/current            | Última leitura autorizada                        |
+| GET /api/device/history.php            | GET /api/device/history            | Histórico autorizado, horas/limite validados     |
+| GET /api/device/status.php             | GET /api/device/status             | Estado autorizado                                |
+| GET /api/device/alerts.php             | GET /api/device/alerts             | Offline, nível <20 crítico e <40 baixo           |
+| POST /api/device/ingest.php            | POST /api/device/ingest            | Ingestão HTTPS opcional, segredo por dispositivo |
+| GET /health.php, /api/health.php       | GET /api/health                    | Saúde do D1, sem detalhes internos               |
 
 Aliases `.php` permanecem apenas como rotas TypeScript para compatibilidade externa.
 Novo GET `/api/device/snapshot` agrega leitura, estado e alertas em uma requisição.

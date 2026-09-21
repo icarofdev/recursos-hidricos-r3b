@@ -221,3 +221,11 @@
     color: var(--color-success);
     border: 1px solid var(--color-success);
 }
+
+[data-tone="admin-tone-1"]{color: #6ee7b7}
+[data-tone="admin-tone-2"]{color: #38bdf8}
+[data-tone="admin-tone-3"]{color: #8da4b1}
+[data-tone="admin-tone-4"]{color:#4ade80}
+[data-tone="admin-tone-5"]{color:#94a3b8}
+[data-tone="admin-tone-6"]{color:#ef4444}
+[data-tone="info"]{color:#38bdf8}[data-tone="success"]{color:#4ade80}[data-tone="error"]{color:#ef4444}

@@ -1,0 +1,7 @@
+static/js/vendor/
+legacy/
+dist/
+.runtime/
+.vercel/
+node_modules/
+docs/LEGACY-PHP.md

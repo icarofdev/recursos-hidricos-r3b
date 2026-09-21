@@ -1306,3 +1306,6 @@ td.numeric { text-align: right; font-variant-numeric: tabular-nums; }
     color: #fef08a;
 }
 
+
+.theme-margin{margin-top:8px}
+body.modal-open{overflow:hidden}
