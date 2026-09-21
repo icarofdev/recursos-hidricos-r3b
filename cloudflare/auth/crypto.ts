@@ -30,12 +30,12 @@ export function equal(a: string, b: string): boolean {
 }
 export function validatePassword(value: string, confirmation: string): void {
   if (
-    encoder.encode(value).length < 10 ||
+    encoder.encode(value).length < 8 ||
     encoder.encode(value).length > 128 ||
     !/[A-Za-z]/.test(value) ||
     !/[0-9]/.test(value)
   )
-    throw new HttpError(422, 'WEAK_PASSWORD', 'Use uma senha de 10 a 128 caracteres, com letras e números.');
+    throw new HttpError(422, 'WEAK_PASSWORD', 'Use uma senha de 8 a 128 caracteres, com letras e números.');
   if (!equal(value, confirmation))
     throw new HttpError(422, 'PASSWORD_MISMATCH', 'A confirmação da senha não corresponde.');
 }
