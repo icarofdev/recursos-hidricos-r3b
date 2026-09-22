@@ -142,6 +142,49 @@ import { safeRedirect } from './redirects.js';
     document.getElementById('reset-success').hidden = false;
   }
 
+  // Alternar visualização da senha (ícone de olho)
+  document.querySelectorAll('.password-toggle-btn').forEach((button) => {
+    button.addEventListener('click', () => {
+      const wrapper = button.closest('.password-field-wrapper');
+      const input = wrapper?.querySelector('input');
+      if (!input) return;
+      const isPassword = input.type === 'password';
+      input.type = isPassword ? 'text' : 'password';
+      button.classList.toggle('is-visible', isPassword);
+      button.setAttribute('aria-label', isPassword ? 'Ocultar senha' : 'Mostrar senha');
+      button.title = isPassword ? 'Ocultar senha' : 'Mostrar senha';
+    });
+  });
+
+  // Checklist de requisitos de senha em tempo real
+  document.querySelectorAll('input[name="password"]').forEach((input) => {
+    const form = input.closest('form');
+    const checklist = form?.querySelector('.password-checklist');
+    if (!checklist) return;
+
+    const rules = {
+      length: (val) => val.length >= 8 && val.length <= 128,
+      uppercase: (val) => /[A-Z]/.test(val),
+      lowercase: (val) => /[a-z]/.test(val),
+      number: (val) => /[0-9]/.test(val),
+      special: (val) => /[^A-Za-z0-9]/.test(val),
+    };
+
+    function updateChecklist() {
+      const val = input.value || '';
+      for (const [rule, validator] of Object.entries(rules)) {
+        const item = checklist.querySelector(`[data-rule="${rule}"]`);
+        if (item) {
+          item.classList.toggle('is-valid', validator(val));
+        }
+      }
+    }
+
+    input.addEventListener('input', updateChecklist);
+    input.addEventListener('change', updateChecklist);
+    updateChecklist();
+  });
+
   const pathname = window.location.pathname;
   if (['/login', '/cadastro'].some((p) => pathname === p || pathname.endsWith(p))) {
     fetch(apiUrl('/api/auth/me'), { credentials: 'include', headers: { Accept: 'application/json' } })

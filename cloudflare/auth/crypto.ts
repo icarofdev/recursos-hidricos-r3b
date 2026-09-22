@@ -32,10 +32,16 @@ export function validatePassword(value: string, confirmation: string): void {
   if (
     encoder.encode(value).length < 8 ||
     encoder.encode(value).length > 128 ||
-    !/[A-Za-z]/.test(value) ||
-    !/[0-9]/.test(value)
+    !/[A-Z]/.test(value) ||
+    !/[a-z]/.test(value) ||
+    !/[0-9]/.test(value) ||
+    !/[^A-Za-z0-9]/.test(value)
   )
-    throw new HttpError(422, 'WEAK_PASSWORD', 'Use uma senha de 8 a 128 caracteres, com letras e números.');
+    throw new HttpError(
+      422,
+      'WEAK_PASSWORD',
+      'A senha deve conter no mínimo 8 caracteres, incluindo letras maiúsculas, minúsculas, números e caracteres especiais.',
+    );
   if (!equal(value, confirmation))
     throw new HttpError(422, 'PASSWORD_MISMATCH', 'A confirmação da senha não corresponde.');
 }

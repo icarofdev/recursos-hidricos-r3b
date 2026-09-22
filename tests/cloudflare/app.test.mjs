@@ -287,6 +287,42 @@ test('login lembrado, redirects seguros e bloqueio de origem externa', async () 
   assert.equal(basic.res.status, 200);
   assert.doesNotMatch(basic.res.headers.get('set-cookie'), /Max-Age/);
 });
+test('validação de senha exige 8+ caracteres, maiúscula, minúscula, número e caractere especial', async () => {
+  const client = browser();
+  await client.init();
+  const invalidPasswords = [
+    'Aa1!aaa', // menos de 8 caracteres
+    'senha-teste-1234', // sem maiúscula
+    'SENHA-TESTE-1234', // sem minúscula
+    'Senha-de-teste!', // sem número
+    'SenhaForte1234', // sem caractere especial
+  ];
+  for (const pass of invalidPasswords) {
+    const res = await client.request('/api/auth/register', {
+      method: 'POST',
+      data: {
+        name: 'Teste',
+        email: `weak_${++ipCounter}@example.test`,
+        password: pass,
+        password_confirmation: pass,
+      },
+    });
+    assert.equal(res.status, 422);
+    const body = await res.json();
+    assert.equal(body.error?.code, 'WEAK_PASSWORD');
+  }
+  const mismatch = await client.request('/api/auth/register', {
+    method: 'POST',
+    data: {
+      name: 'Teste',
+      email: `mismatch_${++ipCounter}@example.test`,
+      password: 'Senha-Forte-123',
+      password_confirmation: 'Outra-Senha-123',
+    },
+  });
+  assert.equal(mismatch.status, 422);
+  assert.equal((await mismatch.json()).error?.code, 'PASSWORD_MISMATCH');
+});
 test('sessões expiram por inatividade, limite absoluto e giram após 15 minutos', async () => {
   const client = browser();
   await client.register();
