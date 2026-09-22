@@ -1,23 +1,17 @@
 .env
 .env.*
-!.env.example
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
 
-/vendor/
-/composer.phar
+# Runtime, logs and local DB
 /.runtime/
 /logs/
 *.log
-
 *.db
 *.db-journal
 *.db-shm
 *.db-wal
-
-deploy/vps.env
-deploy/vps.env*
-deploy/*.env
-*.tar
-*.tar.gz
 
 # Cloudflare: apenas dist e o Worker compilado serão publicados.
 /node_modules/

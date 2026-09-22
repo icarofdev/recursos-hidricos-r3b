@@ -29,8 +29,8 @@ Navegador → Frontend Estático (Vercel)
    - Banco relacional SQLite distribuído na borda (`hidra-r3b`, binding `DB`).
    - Migrations versionadas (`cloudflare/migrations/0001` a `0005`).
    - Integridade referencial com foreign keys, triggers de atomicidade e trilha de auditoria imutável.
-4. **Isolamento de Legado:**
-   - O código legado em PHP, scripts de VPS e subscribers MQTT permanecem preservados em suas pastas históricas, mas estão **estritamente excluídos** do build e deploy de produção.
+4. **Stack 100% Serverless & TypeScript:**
+   - Todo o backend, frontend, integrações e rotinas de build operam de ponta a ponta em TypeScript e Node.js 22, com zero dependências de servidores ou runtimes legados.
 
 ---
 
