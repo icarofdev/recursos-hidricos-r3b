@@ -110,26 +110,14 @@
             </label>
 
             <label class="form-field">
-              <span>Identificador / Número de Série conhecido</span>
+              <span>MAC address do equipamento</span>
               <input
                 type="text"
-                id="device-code"
-                name="device_code"
-                placeholder="Ex.: SMWU-2026-001"
-                maxlength="64"
+                id="device-mac"
+                name="mac_address"
+                placeholder="Ex.: 8C:4F:00:E4:8A:23"
+                maxlength="17"
                 required
-                autocomplete="off"
-              />
-            </label>
-
-            <label class="form-field">
-              <span>External ID da Monitorie</span>
-              <input
-                type="text"
-                id="external-id"
-                name="external_id"
-                placeholder="Identificador confirmado pelo fornecedor"
-                maxlength="128"
                 autocomplete="off"
               />
             </label>
@@ -170,9 +158,9 @@
             <table class="admin-table">
               <thead>
                 <tr>
-                  <th>Identificador</th>
+                  <th>MAC do equipamento</th>
                   <th>Modelo</th>
-                  <th>External ID</th>
+                  <th>MonitorIE</th>
                   <th>Status</th>
                   <th>Proprietário Atual</th>
                   <th>Código Ativo?</th>
@@ -186,6 +174,16 @@
               </tbody>
             </table>
           </div>
+        </section>
+
+        <section class="surface admin-card">
+          <h2 class="card-title">Localizar telemetria pelo MAC</h2>
+          <p class="section-description">Selecione um equipamento sem telemetria vinculada e avance a consulta. Cada etapa lê a lista ou a chave de telemetria “mac” de um dispositivo na MonitorIE. A associação ocorre somente após verificar a lista inteira e encontrar o MAC exato uma única vez no mesmo modelo.</p>
+          <form id="associate-monitorie-form" class="admin-form-grid">
+            <label class="form-field"><span>Equipamento cadastrado</span><select id="associate-device" required></select></label>
+            <div class="form-actions-full"><button type="submit" class="primary-button">Consultar próxima etapa</button></div>
+          </form>
+          <p class="form-feedback" id="associate-feedback" role="status"></p>
         </section>
 
         <!-- Trilha de Auditoria -->

@@ -64,5 +64,5 @@ test('dashboard uses snapshot, clamps cadence and never requests parallel compat
   assert.doesNotMatch(script, /\/api\/device\/(current|status|alerts)/);
   const html = await readFile('dist/frontend/index.html', 'utf8');
   assert.doesNotMatch(html, /<option value="(?:5000|15000|30000)"/);
-  assert.match(script, /refreshMilliseconds: 6(?:0000|e4)/);
+  assert.match(script, /refreshMilliseconds: 75(?:000|e3)/);
 });

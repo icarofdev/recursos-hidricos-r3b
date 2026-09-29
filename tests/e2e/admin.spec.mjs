@@ -6,7 +6,7 @@ test.describe('Painel Administrativo', () => {
     const unique = Date.now();
     const email = `admin_${unique}@example.test`;
     const password = 'Senha-Segura-E2E-12345';
-    const newDeviceCode = `SMWA-E2E-${unique}`;
+    const newDeviceMac = `02:00:${[(unique >>> 24) & 255, (unique >>> 16) & 255, (unique >>> 8) & 255, unique & 255].map((n) => n.toString(16).padStart(2, '0')).join(':')}`;
 
     // 1. Cadastrar usuário
     await page.goto('/cadastro');
@@ -27,13 +27,13 @@ test.describe('Painel Administrativo', () => {
 
     // 4. Cadastrar um novo dispositivo SM-WA
     await page.selectOption('#device-type', 'SM-WA');
-    await page.fill('#device-code', newDeviceCode);
-    await page.selectOption('#device-source', 'mock');
+    await page.fill('#device-mac', newDeviceMac);
+    await page.selectOption('#device-source', 'monitorie');
     await page.click('#btn-create-device');
 
     // 5. Verificar feedback de sucesso e presença na tabela
     await expect(page.locator('#create-feedback')).toContainText('com sucesso');
-    const deviceRow = page.locator('#devices-table-body tr', { hasText: newDeviceCode });
+    const deviceRow = page.locator('#devices-table-body tr', { hasText: newDeviceMac.toUpperCase() });
     await expect(deviceRow).toBeVisible();
 
     // 6. Gerar código de ativação para o dispositivo recém-criado
@@ -43,5 +43,17 @@ test.describe('Painel Administrativo', () => {
     // 7. Verificar que o modal do código de ativação foi exibido
     await expect(page.locator('#code-modal')).toBeVisible();
     await expect(page.locator('#display-activation-code')).toContainText('HIDRA-');
+    const activationCode = await page.locator('#display-activation-code').innerText();
+
+    // O equipamento sem vínculo de telemetria continua pareável pelo MAC e código.
+    await page.goto('/');
+    await page.locator('#connect-first-device, #connect-device-top').first().click();
+    await page.fill('#pairing-code', activationCode);
+    await page.fill('#pairing-mac', newDeviceMac);
+    await page.click('#pairing-code-form button[type="submit"]');
+    await expect(page.locator('#pairing-device-status')).toHaveText('Telemetria não vinculada à MonitorIE');
+    await page.fill('#pairing-reservoir-name', 'Hidrômetro pendente');
+    await page.click('#pairing-confirm-form button[type="submit"]');
+    await expect(page.locator('#system-status-title')).toHaveText('Telemetria não vinculada');
   });
 });

@@ -12,7 +12,7 @@ import { reservoirsRoute } from './db/reservoirs';
 import { maintenance } from './db/maintenance';
 import { telemetryRoute } from './telemetry';
 import { adminRoute } from './admin/routes';
-import { monitorieJwt } from './monitorie/protocol';
+import { monitorieAuthConfigured } from './monitorie/auth';
 
 const frontendPages = new Set(['/', '/login', '/cadastro', '/esqueci-senha', '/redefinir-senha', '/admin']);
 const pageAliases: Record<string, string> = {
@@ -148,13 +148,7 @@ async function route(c: Context): Promise<Response> {
       )
         throw new Error('config');
       await c.env.DB.prepare('SELECT token_hash FROM device_credentials LIMIT 1').first();
-      let monitorie = 'blocked';
-      try {
-        monitorieJwt(c.env);
-        monitorie = 'configured';
-      } catch {
-        // MonitorIE é opcional; um token ausente/expirado não derruba contas e sessões.
-      }
+      const monitorie = (await monitorieAuthConfigured(c.env)) ? 'configured' : 'blocked';
       return json({ status: 'ready', monitorie });
     } catch {
       return json({ status: 'not_ready' }, 503);

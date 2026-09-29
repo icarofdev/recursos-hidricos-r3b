@@ -69,6 +69,19 @@ async function loadDevices() {
   const tbody = document.getElementById('devices-table-body');
   try {
     const res = await request('/api/admin/devices');
+    const select = document.getElementById('associate-device');
+    if (select) {
+      const previous = select.value;
+      select.replaceChildren();
+      for (const dev of res.data || []) {
+        if (dev.source === 'monitorie' && dev.mac_address) {
+          select.add(
+            new Option(`${dev.device_type} · ${dev.mac_address}`, String(dev.id)),
+          );
+        }
+      }
+      if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+    }
     if (!res.data?.length) {
       tbody.innerHTML =
         '<tr><td colspan="7" class="table-empty">Nenhum dispositivo cadastrado até o momento.</td></tr>';
@@ -88,6 +101,9 @@ async function loadDevices() {
           : '<span data-tone="admin-tone-3">Não</span>';
 
         let actions = '';
+        if (!dev.mac_address) {
+          actions += `<button class="btn-sm" data-action="fillMac" data-device-id="${dev.id}" data-linked="${Boolean(dev.owner)}">Informar MAC</button>`;
+        }
         if (!dev.owner && !dev.activation_code?.active) {
           actions += `<button class="btn-sm btn-generate" data-action="generateCode" data-device-id="${dev.id}">Gerar Código</button>`;
         }
@@ -101,9 +117,9 @@ async function loadDevices() {
 
         return `
                 <tr>
-                    <td><strong>${escapeHTML(dev.device_code)}</strong></td>
+                    <td><strong>${escapeHTML(dev.mac_address || 'MAC não registrado (legado)')}</strong></td>
                     <td><span class="badge-model ${badgeClass}">${escapeHTML(dev.device_type)}</span></td>
-                    <td><code>${escapeHTML(dev.external_id || '—')}</code></td>
+                    <td>${dev.source === 'monitorie' ? (dev.external_id ? 'Telemetria vinculada' : '<span data-tone="admin-tone-2">Telemetria não vinculada</span>') : 'Local'}</td>
                     <td>${dev.status === 'online' ? '<span data-tone="admin-tone-4">● Online</span>' : '<span data-tone="admin-tone-5">○ Offline</span>'}</td>
                     <td>${ownerDisplay}</td>
                     <td>${activeCode}</td>
@@ -162,6 +178,23 @@ async function generateCode(deviceId) {
     await loadAudit();
   } catch (err) {
     alert(`Erro ao gerar código: ${err.message}`);
+  }
+}
+
+async function fillMac(deviceId, linked) {
+  const mac = prompt('Informe o MAC físico confirmado para este equipamento legado:');
+  if (mac === null) return;
+  if (linked && !confirm('Este equipamento já está vinculado a um cliente. Confirma o MAC físico informado?'))
+    return;
+  try {
+    await request(`/api/admin/devices/${deviceId}/update`, {
+      method: 'POST',
+      data: { mac_address: mac, confirm_linked_modification: linked },
+    });
+    await loadDevices();
+    await loadAudit();
+  } catch (error) {
+    alert(`Erro ao registrar MAC: ${error.message}`);
   }
 }
 
@@ -251,8 +284,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     feedback.dataset.tone = 'info';
 
     const deviceType = document.getElementById('device-type').value;
-    const deviceCode = document.getElementById('device-code').value.trim();
-    const externalId = document.getElementById('external-id').value.trim() || null;
+    const macAddress = document.getElementById('device-mac').value.trim();
     const source = document.getElementById('device-source').value;
 
     try {
@@ -260,8 +292,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         method: 'POST',
         data: {
           device_type: deviceType,
-          device_code: deviceCode,
-          external_id: externalId,
+          mac_address: macAddress,
           source,
         },
       });
@@ -276,11 +307,34 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   });
 
+  const associationForm = document.getElementById('associate-monitorie-form');
+  const associationFeedback = document.getElementById('associate-feedback');
+  associationForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    associationFeedback.textContent = 'Consultando a MonitorIE…';
+    associationFeedback.dataset.tone = 'info';
+    const deviceId = Number(document.getElementById('associate-device').value);
+    try {
+      const result = await request(`/api/admin/devices/${deviceId}/monitorie-discover`, { method: 'POST' });
+      associationFeedback.textContent = result.status === 'linked'
+        ? 'Telemetria vinculada: MAC exato confirmado em um único dispositivo acessível.'
+        : result.status === 'scanning'
+          ? `Consulta em andamento (${result.checked} dispositivos verificados). Aguarde 70 segundos e consulte a próxima etapa.`
+          : result.reason || 'Telemetria não vinculada.';
+      associationFeedback.dataset.tone = result.status === 'linked' ? 'success' : 'info';
+      if (result.status === 'linked') { await loadDevices(); await loadAudit(); }
+    } catch (error) {
+      associationFeedback.textContent = `Erro: ${error.message}`;
+      associationFeedback.dataset.tone = 'error';
+    }
+  });
+
   document.getElementById('devices-table-body')?.addEventListener('click', (event) => {
     const button = event.target.closest('[data-action]');
     if (!button) return;
-    const actions = { generateCode, revokeCode, unlinkDevice, transferDevice };
+    const actions = { generateCode, revokeCode, unlinkDevice, transferDevice, fillMac };
     const id = Number(button.dataset.deviceId);
-    if (Number.isSafeInteger(id) && id > 0) void actions[button.dataset.action]?.(id);
+    if (Number.isSafeInteger(id) && id > 0)
+      void actions[button.dataset.action]?.(id, button.dataset.linked === 'true');
   });
 });

@@ -2,7 +2,9 @@ import { HttpError } from '../http';
 export function domainError(error: unknown): never {
   const message = error instanceof Error ? error.message : '';
   if (
-    /UNIQUE constraint|mutation_guard|CHECK constraint failed: value=1|FOREIGN KEY constraint/i.test(message)
+    /UNIQUE constraint|mutation_guard|CHECK constraint failed: value=1|FOREIGN KEY constraint|MONITORIE_ID_IN_USE/i.test(
+      message,
+    )
   )
     throw new HttpError(
       409,

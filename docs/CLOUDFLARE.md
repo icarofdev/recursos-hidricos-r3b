@@ -49,6 +49,8 @@ As migrations versionadas são:
 - `0003_ingestion_retention.sql`: idempotência, retenção e `device_credentials`.
 - `0004_atomic_audit.sql`: auditoria imutável e gatilhos atômicos.
 - `0005_telemetry_cache.sql`: cache/lock de telemetria.
+- `0006_device_mac.sql`: MAC normalizado opcional para registros antigos, obrigatório no novo cadastro, com índice único. Preserva códigos internos, ativações, proprietários e vínculos existentes.
+- `0007_monitorie_auth_cache.sql`: cache cifrado e lease de login/refresh da MonitorIE; não altera dispositivos, vínculos ou leituras existentes.
 
 Depois, consulte `sqlite_master` e o estado de migrations pelos comandos oficiais do Wrangler para confirmar tabelas, índices e triggers. Não altere o schema manualmente.
 
@@ -60,12 +62,14 @@ Gere `SESSION_SECRET` e `PASSWORD_PEPPER` de forma criptograficamente aleatória
 # Production
 node scripts/cloudflare/wrangler.mjs secret put SESSION_SECRET
 node scripts/cloudflare/wrangler.mjs secret put PASSWORD_PEPPER
-node scripts/cloudflare/wrangler.mjs secret put MONITORIE_JWT
+node scripts/cloudflare/wrangler.mjs secret put MONITORIE_USERNAME
+node scripts/cloudflare/wrangler.mjs secret put MONITORIE_PASSWORD
 
 # Preview: secrets independentes
 node scripts/cloudflare/wrangler.mjs secret put SESSION_SECRET --env preview
 node scripts/cloudflare/wrangler.mjs secret put PASSWORD_PEPPER --env preview
-node scripts/cloudflare/wrangler.mjs secret put MONITORIE_JWT --env preview
+node scripts/cloudflare/wrangler.mjs secret put MONITORIE_USERNAME --env preview
+node scripts/cloudflare/wrangler.mjs secret put MONITORIE_PASSWORD --env preview
 ```
 
 As configurações não secretas ficam em `[vars]` e `[env.preview.vars]` no `wrangler.toml`. Preencha `APP_URL` e `CORS_ORIGINS` somente quando a URL HTTPS estável do frontend correspondente for conhecida; use a origem exata, sem caminho, query, fragmento ou curingas.
@@ -91,7 +95,7 @@ As configurações não secretas ficam em `[vars]` e `[env.preview.vars]` no `wr
 ### Integrações opcionais
 
 - Brevo: configure `BREVO_API_KEY`, remetente e nome apenas quando houver credenciais reais e remetente verificado; só então altere `MAIL_MODE=brevo` e teste o fluxo completo de redefinição.
-- Monitor IE: o JWT de Account > Security é o secret `MONITORIE_JWT`; nunca o configure como variável pública. O Swagger confirma `X-Authorization`, endpoints de leitura, paginação e timestamps UTC em ms. Descubra UUID/keys com `npm run monitorie:probe -- ...`, configure `MONITORIE_SMWU_MAPPING`/`MONITORIE_SMWA_MAPPING` somente com nomes e unidades confirmados e preserve `MONITORIE_MODE=unconfigured` até a validação. O código não faz login/refresh automático e não usa mock fora do desenvolvimento local; veja `docs/MONITORIE.md`.
+- Monitor IE: configure `MONITORIE_USERNAME` e `MONITORIE_PASSWORD` somente como secrets do Worker. O backend faz login e refresh, mantendo o par de tokens cifrado no D1 pela chave derivada de `SESSION_SECRET`; `MONITORIE_JWT` permanece apenas como alternativa manual se ambas as credenciais estiverem ausentes. O backend percorre a lista e consulta a chave de telemetria `mac` de cada dispositivo para confirmar uma correspondência exata, única e do mesmo modelo antes de vincular a leitura. Configure `MONITORIE_SMWU_MAPPING`/`MONITORIE_SMWA_MAPPING` somente com nomes e unidades confirmados e preserve `MONITORIE_MODE=unconfigured` até a validação; veja `docs/MONITORIE.md`.
 - Ingestão local: não existe secret global `DEVICE_TOKENS` no Worker atual. Tokens são provisionados/rotacionados pelo fluxo administrativo, exibidos uma vez e persistidos somente como hash em `device_credentials`. Habilite `INGEST_ENABLED` apenas para dispositivo `source='local'` real e validado.
 
 ## 4. Build e frontend Vercel

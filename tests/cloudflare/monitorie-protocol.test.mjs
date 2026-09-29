@@ -130,7 +130,7 @@ test('MonitorIE: IDs/keys/limites inválidos não disparam chamadas', async () =
       return json({});
     },
   );
-  for (const bad of ['../../api/auth/user', 'not-an-id', 'https://example.test'])
+  for (const bad of ['../../api/auth/user', 'bad id', 'https://example.test'])
     await assert.rejects(client.latest(bad, ['x']), code('MONITORIE_NOT_CONFIGURED'));
   for (const bad of [[], ['a,b'], ['x', 'x'], ['\n']])
     await assert.rejects(client.latest(id, bad), code('MONITORIE_NOT_CONFIGURED'));

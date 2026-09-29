@@ -113,12 +113,14 @@ function initializeCharts() {
       return formatTooltipTitle(row?.timestamp);
     },
     label(context) {
-      return dashboardState.selectedMetric === 'consumo'
-        ? `Consumo: ${formatNumber(context.parsed.y, 2)} L`
+      if (dashboardState.selectedMetric === 'consumo')
+        return `Consumo: ${formatNumber(context.parsed.y, 2)} L`;
+      return getSelectedReservoir()?.device?.type === 'SM-WA'
+        ? `Consumo acumulado: ${formatNumber(context.parsed.y, 2)} L`
         : `Nível: ${formatNumber(context.parsed.y, 2)}%`;
     },
     afterLabel(context) {
-      if (dashboardState.selectedMetric !== 'nivel') return '';
+      if (dashboardState.selectedMetric !== 'nivel' || getSelectedReservoir()?.device?.type === 'SM-WA') return '';
       const row = dashboardState.mainChartRows[context.dataIndex];
       const volume = toFiniteNumber(row?.volume);
       return volume === null ? 'Volume: não informado' : `Volume: ${formatNumber(volume, 2)} L`;
@@ -196,6 +198,7 @@ function initializeCharts() {
 
 function renderChart() {
   const rangeHistory = getRangeHistory();
+  const isSMWA = getSelectedReservoir()?.device?.type === 'SM-WA';
 
   if (dashboardState.historyError) {
     showChartState(
@@ -214,7 +217,7 @@ function renderChart() {
 
   if (dashboardState.selectedMetric === 'consumo') {
     const consumption = getConsumptionSeries(rangeHistory);
-    getElement('chart-legend-label').textContent = 'Consumo estimado';
+    getElement('chart-legend-label').textContent = isSMWA ? 'Consumo no período' : 'Consumo estimado';
 
     if (!consumption.available) {
       showChartState(
@@ -222,7 +225,9 @@ function renderChart() {
         'chart-state-title',
         'chart-state-description',
         'Dados insuficientes para consumo',
-        'São necessárias ao menos duas leituras válidas de volume no período.',
+        isSMWA
+          ? 'São necessárias ao menos duas leituras válidas do contador acumulado no período.'
+          : 'São necessárias ao menos duas leituras válidas de volume no período.',
       );
       getElement('chart-summary').textContent = 'Dados insuficientes para análise de consumo neste período.';
       return;
@@ -253,6 +258,49 @@ function renderChart() {
     getElement('chart-summary').textContent = consumption.points.length
       ? `Consumo estimado de ${formatNumber(consumption.total, 2)} L, calculado em ${consumption.intervals} intervalos entre leituras.`
       : `Nenhuma redução de volume foi detectada nos ${consumption.intervals} intervalos analisados.`;
+    hideChartState('chart-stage');
+    return;
+  }
+
+  if (isSMWA) {
+    const rows = rangeHistory.filter((item) => toFiniteNumber(item.consumo_acumulado) !== null);
+    getElement('chart-legend-label').textContent = 'Consumo acumulado';
+    if (!rows.length) {
+      showChartState(
+        'chart-stage',
+        'chart-state-title',
+        'chart-state-description',
+        'Nenhuma leitura no período',
+        'Ainda não há valores válidos do contador acumulado para a faixa selecionada.',
+      );
+      getElement('chart-summary').textContent = 'Dados insuficientes para analisar o consumo acumulado neste período.';
+      return;
+    }
+    const values = rows.map((item) => toFiniteNumber(item.consumo_acumulado));
+    dashboardState.mainChartRows = rows;
+    historyChart.data.labels = rows.map((item) => formatChartLabel(item.timestamp));
+    historyChart.data.datasets[0] = {
+      type: 'line',
+      label: 'Consumo acumulado',
+      data: values,
+      borderColor: '#0f9fbc',
+      backgroundColor: 'rgba(15, 159, 188, 0.08)',
+      borderWidth: 2.25,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+      pointHoverBackgroundColor: '#0c5674',
+      pointHoverBorderColor: '#ffffff',
+      pointHoverBorderWidth: 2,
+      fill: true,
+      tension: 0.28,
+    };
+    historyChart.options.scales.y.beginAtZero = true;
+    historyChart.options.scales.y.suggestedMax = undefined;
+    historyChart.options.scales.y.ticks.callback = (value) => `${formatNumber(value, 0)} L`;
+    historyChart.update();
+    const summary = `Último consumo acumulado no período: ${formatNumber(values[values.length - 1], 2)} L.`;
+    getElement('history-chart').setAttribute('aria-label', summary);
+    getElement('chart-summary').textContent = summary;
     hideChartState('chart-stage');
     return;
   }
@@ -312,6 +360,7 @@ function renderChart() {
 
 function renderConsumption() {
   const consumption = getConsumptionSeries();
+  const isSMWA = getSelectedReservoir()?.device?.type === 'SM-WA';
   const totalBadge = getElement('consumption-period-total');
 
   if (dashboardState.historyError) {
@@ -335,7 +384,9 @@ function renderConsumption() {
       'consumption-state-title',
       'consumption-state-description',
       'Dados insuficientes',
-      'São necessárias ao menos duas leituras válidas de volume no período.',
+      isSMWA
+        ? 'São necessárias ao menos duas leituras válidas do contador acumulado no período.'
+        : 'São necessárias ao menos duas leituras válidas de volume no período.',
     );
     return;
   }

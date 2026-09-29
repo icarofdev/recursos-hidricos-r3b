@@ -4,6 +4,8 @@ import { csrf, requireAdmin } from '../auth/sessions';
 import { randomToken, sha256 } from '../auth/crypto';
 import { auditStatement, guard } from './audit';
 import { credentialAction } from './credentials';
+import { codeFromMac, normalizeMac } from './device-identity';
+import { discoverMonitorie } from './monitorie-association';
 
 export async function deviceMutation(c: Context, path: string): Promise<Response | null> {
   if (c.request.method !== 'POST') return null;
@@ -11,19 +13,18 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
   const admin = requireAdmin(c);
   const time = now();
   if (path === '/api/admin/devices') {
-    const data = await body(c, ['device_type', 'device_code', 'external_id', 'source']);
+    const data = await body(c, ['device_type', 'mac_address', 'source']);
     const type = string(data, 'device_type', 10).trim().toUpperCase();
     validateType(type);
-    const code = string(data, 'device_code', 64).trim().toUpperCase();
-    validateCode(code);
-    const external = data.external_id ? string(data, 'external_id', 128).trim() : null;
+    const mac = normalizeMac(data.mac_address);
+    const code = codeFromMac(type as DeviceType, mac);
     const source = data.source ? string(data, 'source', 20).trim() : 'monitorie';
     if (!['monitorie', 'local', 'mock'].includes(source) || (source === 'mock' && !isLocal(c)))
       throw new HttpError(422, 'INVALID_SOURCE', 'Fonte indisponível neste ambiente.');
     const results = await c.env.DB.batch([
       c.env.DB.prepare(
-        'INSERT INTO devices(device_code,device_type,source,external_id,created_at,updated_at) VALUES (?,?,?,?,?,?) RETURNING id',
-      ).bind(code, type, source, external, time, time),
+        'INSERT INTO devices(device_code,device_type,source,mac_address,created_at,updated_at) VALUES (?,?,?,?,?,?) RETURNING id',
+      ).bind(code, type, source, mac, time, time),
       c.env.DB.prepare(
         `INSERT INTO audit_logs(action,device_id,user_id,details,created_at)
     SELECT 'device_created',id,?,?,? FROM devices WHERE device_code=?`,
@@ -36,9 +37,9 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
         device: {
           id,
           device_code: code,
+          mac_address: mac,
           device_type: type,
           source,
-          external_id: external,
           created_at: iso(time),
         },
       },
@@ -46,7 +47,7 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
     );
   }
   const match = path.match(
-    /^\/api\/admin\/devices\/(\d+)\/(generate-code|revoke-code|unlink|transfer|update|rotate-token|revoke-token|delete)$/,
+    /^\/api\/admin\/devices\/(\d+)\/(generate-code|revoke-code|unlink|transfer|update|rotate-token|revoke-token|delete|monitorie-discover)$/,
   );
   if (!match) return null;
   const deviceId = positiveId(match[1]),
@@ -55,10 +56,14 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
     await body(c, []);
     return credentialAction(c, deviceId, action === 'revoke-token');
   }
+  if (action === 'monitorie-discover') return discoverMonitorie(c, deviceId);
   const device = await c.env.DB.prepare('SELECT * FROM devices WHERE id=?').bind(deviceId).first<{
     device_type: DeviceType;
     device_code: string;
+    mac_address: string | null;
     external_id: string | null;
+    reported_status: string;
+    last_seen: number | null;
     owner_user_id: number | null;
     source: string;
   }>();
@@ -66,29 +71,23 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
   const statements = [
     guard(
       c,
-      'SELECT 1 FROM devices WHERE id=? AND owner_user_id IS ? AND device_type=? AND external_id IS ? AND device_code=?',
+      'SELECT 1 FROM devices WHERE id=? AND owner_user_id IS ? AND device_type=? AND external_id IS ? AND device_code=? AND mac_address IS ?',
       deviceId,
       device.owner_user_id,
       device.device_type,
       device.external_id,
       device.device_code,
+      device.mac_address,
     ),
   ];
   if (action === 'update') {
-    const data = await body(c, ['device_type', 'device_code', 'external_id', 'confirm_linked_modification']);
+    const data = await body(c, ['device_type', 'mac_address', 'confirm_linked_modification']);
     const type = data.device_type ? string(data, 'device_type', 10).trim().toUpperCase() : device.device_type;
     validateType(type);
-    const code = data.device_code ? string(data, 'device_code', 64).trim().toUpperCase() : device.device_code;
-    validateCode(code);
-    const external =
-      data.external_id === undefined
-        ? device.external_id
-        : data.external_id
-          ? string(data, 'external_id', 128).trim()
-          : null;
+    const mac = data.mac_address === undefined ? device.mac_address : normalizeMac(data.mac_address);
     if (
       device.owner_user_id !== null &&
-      (type !== device.device_type || external !== device.external_id) &&
+      (type !== device.device_type || mac !== device.mac_address) &&
       data.confirm_linked_modification !== true
     )
       throw new HttpError(
@@ -96,11 +95,19 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
         'DEVICE_LINKED_IMMUTABLE',
         'Confirme explicitamente a alteração do equipamento vinculado.',
       );
+    const identityChanged = device.source === 'monitorie' &&
+      (type !== device.device_type || (device.mac_address !== null && mac !== device.mac_address));
     statements.push(
-      c.env.DB.prepare(
-        'UPDATE devices SET device_type=?,device_code=?,external_id=?,updated_at=? WHERE id=?',
-      ).bind(type, code, external, time, deviceId),
-      auditStatement(c, 'device_updated', deviceId, { device_type: type }),
+      c.env.DB.prepare('UPDATE devices SET device_type=?,mac_address=?,external_id=?,reported_status=?,last_seen=?,updated_at=? WHERE id=?').bind(
+        type,
+        mac,
+        identityChanged ? null : device.external_id,
+        identityChanged ? 'offline' : device.reported_status,
+        identityChanged ? null : device.last_seen,
+        time,
+        deviceId,
+      ),
+      auditStatement(c, 'device_updated', deviceId, { device_type: type, telemetry_unlinked: identityChanged }),
     );
   } else if (action === 'delete') {
     const data = await body(c, ['confirmation']);
@@ -167,8 +174,4 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
 function validateType(type: string): void {
   if (type !== 'SM-WU' && type !== 'SM-WA')
     throw new HttpError(422, 'INVALID_DEVICE_TYPE', 'Use SM-WU ou SM-WA.');
-}
-function validateCode(code: string): void {
-  if (!/^[A-Z0-9_-]{3,64}$/.test(code))
-    throw new HttpError(422, 'INVALID_DEVICE_CODE', 'Identificador inválido.');
 }

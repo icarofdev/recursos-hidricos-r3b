@@ -28,12 +28,22 @@ export async function localRuntime({ port, ephemeral = false, monitorie = false 
     : JSON.parse(await readFile(file, 'utf8'));
   const dev = monitorie ? await readDevVars() : {};
   const monitorieBindings = Object.fromEntries(
-    ['MONITORIE_JWT', 'MONITORIE_SMWU_MAPPING', 'MONITORIE_SMWA_MAPPING']
+    [
+      'MONITORIE_JWT',
+      'MONITORIE_USERNAME',
+      'MONITORIE_PASSWORD',
+      'MONITORIE_SMWU_MAPPING',
+      'MONITORIE_SMWA_MAPPING',
+    ]
       .filter((name) => monitorie && dev[name])
       .map((name) => [name, dev[name]]),
   );
-  if (monitorie && !monitorieBindings.MONITORIE_JWT)
-    throw new Error('Configure MONITORIE_JWT em .dev.vars antes de iniciar o modo MonitorIE.');
+  if (
+    monitorie &&
+    !monitorieBindings.MONITORIE_JWT &&
+    !(monitorieBindings.MONITORIE_USERNAME && monitorieBindings.MONITORIE_PASSWORD)
+  )
+    throw new Error('Configure MONITORIE_USERNAME/MONITORIE_PASSWORD ou MONITORIE_JWT em .dev.vars.');
   const mf = new Miniflare({
     modules: true,
     scriptPath: 'dist/worker/index.js',
@@ -53,13 +63,23 @@ export async function localRuntime({ port, ephemeral = false, monitorie = false 
       MAIL_MODE: 'disabled',
       INGEST_ENABLED: 'true',
     },
-    ...(monitorie
-      ? {}
-      : {
-          outboundService: () => {
-            throw new Error('Rede externa desativada no ambiente local');
-          },
-        }),
+    outboundService: monitorie
+      ? async (request) => {
+          const target = new URL(request.url);
+          const authPost =
+            request.method === 'POST' && ['/api/auth/login', '/api/auth/token'].includes(target.pathname);
+          if (target.origin !== 'https://monitorie.com.br' || (request.method !== 'GET' && !authPost))
+            throw new Error('Destino externo não permitido no modo MonitorIE local');
+          return fetch(request.url, {
+            method: request.method,
+            headers: request.headers,
+            ...(authPost ? { body: request.body, duplex: 'half' } : {}),
+            redirect: 'manual',
+          });
+        }
+      : () => {
+          throw new Error('Rede externa desativada no ambiente local');
+        },
   });
   const db = await mf.getD1Database('DB');
   await db.exec('CREATE TABLE IF NOT EXISTS local_migrations (name TEXT PRIMARY KEY)');

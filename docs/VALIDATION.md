@@ -63,7 +63,7 @@ O `.env` legado permanece intacto; a execução Cloudflare não o carrega.
 
 ## Validação em Produção Concluída
 
-1. **Monitor IE (Concluída):** Mapeamento e telemetria real validados para SM-WU (`d`, `nivel`, `volume`, `rssi_wifi`) e SM-WA (`vazao`, `consumo`, `rssi_wifi`). Modo `live` ativo, cache de 300 segundos e gate D1 de concorrência.
+1. **Monitor IE (telemetria validada):** Mapeamento e telemetria real validados para SM-WU (`d`, `nivel`, `volume`, `rssi_wifi`) e SM-WA (`vazao`, `consumo`, `rssi_wifi`). Modo `live` ativo, cache de 300 segundos e gate D1 de concorrência. O novo fluxo de login e refresh foi testado com respostas simuladas; a rota real de refresh respondeu 401 a um token artificial. O teste bem-sucedido com credenciais reais depende de configurar `MONITORIE_USERNAME` e `MONITORIE_PASSWORD` no backend.
 2. **Brevo (Pendente de Ativação Real):** `MAIL_MODE=disabled` mantido até fornecimento de chave definitiva e aprovação formal de envio real.
 3. **Ingestão Direta:** Mantida desabilitada (`INGEST_ENABLED=false`).
 4. **Banco D1 de Produção:** Limpo, sem contas ou dados sintéticos residuais. Apenas usuários e dispositivos reais autorizados.

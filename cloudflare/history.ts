@@ -39,6 +39,8 @@ export async function history(c: Context, row: ReservoirRow): Promise<Response> 
       timestamp: iso(Number(r.created_at)),
       sample_count: r.sample_count ?? 1,
     }));
+  } else if (row.source === 'monitorie' && row.external_id === null) {
+    data = [];
   } else {
     data = (await remoteHistory(c, row, hours, limit)).map((r) => ({ ...r }));
     total = data.length;

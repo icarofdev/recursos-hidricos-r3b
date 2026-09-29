@@ -10,7 +10,9 @@ Navegador → Frontend Estático (Vercel)
                                         → Brevo (recuperação de senha transacional)
 ```
 
-**Estado da integração Monitor IE:** Integração real confirmada e ativa em produção (`MONITORIE_MODE=live`). Mapeamento validado ponta a ponta para medidores **SM-WU** (chaves: `d` em cm, `nivel` em %, `volume` em L, `rssi_wifi` em dBm) e **SM-WA** (chaves: `vazao` em L/h, `consumo` em L, `rssi_wifi` em dBm). Cache configurado para 300 segundos com coordenação atômica no D1 (`D1MonitorieGate`) e desduplicação _single-flight_. Ingestão direta permanece desabilitada (`INGEST_ENABLED=false`).
+**Integração Monitor IE:** O projeto tem mapeamentos previamente documentados para **SM-WU** (`d`, `nivel`, `volume`, `rssi_wifi`) e **SM-WA** (`vazao`, `consumo`, `rssi_wifi`), com cache e coordenação de consultas no D1. O Worker pode fazer login e renovar o JWT com credenciais guardadas como secrets. A correspondência entre MAC e dispositivo remoto precisa ser verificada no ambiente de execução antes de exibir leituras de um novo cadastro.
+
+**Novos equipamentos:** O cadastro administrativo recebe o MAC físico. O pareamento usa esse MAC e o código de ativação; aparelhos legados sem MAC continuam aceitando o código existente. O painel mostra **Telemetria não vinculada** até que uma consulta de leitura à MonitorIE encontre o mesmo valor na chave de telemetria `mac` de exatamente um dispositivo acessível do mesmo modelo. Nenhum identificador da MonitorIE é pedido ao operador ou inferido pelo nome. Veja [o fluxo de descoberta](docs/MONITORIE.md).
 
 ---
 
@@ -27,7 +29,7 @@ Navegador → Frontend Estático (Vercel)
    - Autenticação com PBKDF2-SHA256 (100.000 iterações + pepper) e sessões criptográficas em cookies `HttpOnly`, `Secure`, `SameSite=Lax`.
 3. **Banco de Dados (Cloudflare D1):**
    - Banco relacional SQLite distribuído na borda (`hidra-r3b`, binding `DB`).
-   - Migrations versionadas (`cloudflare/migrations/0001` a `0005`).
+   - Migrations versionadas (`cloudflare/migrations/0001` a `0007`).
    - Integridade referencial com foreign keys, triggers de atomicidade e trilha de auditoria imutável.
 4. **Stack 100% Serverless & TypeScript:**
    - Todo o backend, frontend, integrações e rotinas de build operam de ponta a ponta em TypeScript e Node.js 22, com zero dependências de servidores ou runtimes legados.
@@ -69,7 +71,7 @@ npm run dev:api       # Inicia somente o Cloudflare Worker local
 npm run dev:frontend  # Inicia somente o servidor frontend local
 ```
 
-Para descobrir dispositivos/keys e validar o fluxo real com um JWT guardado em `.dev.vars`, use `npm run monitorie:probe -- ...` e `npm run dev:monitorie`; consulte [a documentação da Monitor IE](docs/MONITORIE.md). O modo comum continua sem acesso à rede externa.
+Para manter a autenticação da Monitor IE no backend, configure `MONITORIE_USERNAME` e `MONITORIE_PASSWORD` em `.dev.vars` e use `npm run dev:monitorie`. O Worker faz login e refresh; o diagnóstico `npm run monitorie:probe -- ...` ainda usa um JWT manual. Consulte [a documentação da Monitor IE](docs/MONITORIE.md). O modo comum continua sem acesso à rede externa.
 
 ### Bootstrap Administrativo
 

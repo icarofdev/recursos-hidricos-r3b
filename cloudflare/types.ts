@@ -13,6 +13,8 @@ export interface Env {
   MAIL_MODE?: string;
   MONITORIE_MODE?: string;
   MONITORIE_JWT?: string;
+  MONITORIE_USERNAME?: string;
+  MONITORIE_PASSWORD?: string;
   MONITORIE_SMWU_MAPPING?: string;
   MONITORIE_SMWA_MAPPING?: string;
   MONITORIE_CACHE_SECONDS?: string;
@@ -75,6 +77,7 @@ export interface ReservoirRow {
   linked_at: number;
   source: 'monitorie' | 'local' | 'mock';
   external_id: string | null;
+  mac_address: string | null;
   last_seen: number | null;
   reported_status: 'online' | 'offline';
 }
@@ -104,6 +107,7 @@ export interface DeviceStatus {
   status: 'online' | 'offline';
   last_seen: string | null;
   offline_after_seconds: number;
+  telemetry_linked?: boolean;
 }
 
 export interface Snapshot {

@@ -1,12 +1,7 @@
 import type { DeviceType, Env, Reading, SMWAReading, Snapshot } from '../types';
 import { monitorieMapping, normalizeMonitorieSeries } from './mapping';
-import {
-  D1MonitorieGate,
-  MonitorieReadClient,
-  monitorieJwt,
-  secondsToTimestampMs,
-  type TelemetrySeries,
-} from './protocol';
+import { D1MonitorieGate, MonitorieReadClient, secondsToTimestampMs, type TelemetrySeries } from './protocol';
+import { MonitorieAuth } from './auth';
 
 /** Contrato interno do Hidra; o mapping explícito faz a fronteira com as keys da MonitorIE. */
 export interface TelemetryScope {
@@ -115,8 +110,7 @@ export class MonitorieAPI implements MonitorieAdapter {
   private readonly smwu: MonitorieSMWUAdapter;
   private readonly smwa: MonitorieSMWAAdapter;
   constructor(env: Env, client?: MonitorieTelemetryClient) {
-    const telemetry =
-      client ?? new MonitorieReadClient(async () => monitorieJwt(env), new D1MonitorieGate(env.DB));
+    const telemetry = client ?? new MonitorieReadClient(new MonitorieAuth(env), new D1MonitorieGate(env.DB));
     this.smwu = new MonitorieSMWUAdapter(env, telemetry);
     this.smwa = new MonitorieSMWAAdapter(env, telemetry);
   }

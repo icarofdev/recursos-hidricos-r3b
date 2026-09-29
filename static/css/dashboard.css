@@ -638,6 +638,10 @@ main {
     padding-top: 22px;
 }
 
+.reservoir-content.is-meter {
+    grid-template-columns: minmax(300px, 1.12fr) minmax(230px, 0.72fr);
+}
+
 .tank-area {
     display: flex;
     flex-direction: column;
@@ -1081,6 +1085,7 @@ td.numeric { text-align: right; font-variant-numeric: tabular-nums; }
     .devices-panel,
     .history-panel { padding: 18px 15px; border-radius: 14px; }
     .reservoir-content { grid-template-columns: 125px minmax(0, 1fr); gap: 22px; }
+    .reservoir-content.is-meter { grid-template-columns: minmax(0, 1fr); }
     .tank-visual { width: 125px; height: 183px; padding-left: 29px; }
     .tank-shell { left: 29px; border-radius: 8px 8px 22px 22px; }
     .tank-scale span::after { width: 5px; margin-left: 3px; }

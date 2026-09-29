@@ -1,33 +1,41 @@
-# Monitor IE — JWT, contrato de leitura e validação
+# Monitor IE — autenticação contínua e contrato de leitura
 
-O backend integra-se à API oficial em `https://monitorie.com.br`. O navegador continua autenticado pela sessão do Hidra e chama somente o Cloudflare Worker; o JWT externo nunca é incluído no frontend, D1, cache, resposta ou log.
+O backend integra-se à API oficial em `https://monitorie.com.br`. O navegador continua autenticado pela sessão do Hidra e chama somente o Cloudflare Worker. Senha, JWT e refreshToken nunca entram no frontend, nas respostas ou nos logs. O D1 guarda apenas o par de tokens cifrado com AES-GCM; a chave é derivada de `SESSION_SECRET` por HKDF e não é armazenada no banco.
 
 ## Contrato confirmado
 
 O Swagger oficial em `https://monitorie.com.br/swagger-ui/` identifica a instalação como ThingsBoard Professional Edition `3.6.4PE` e documenta:
 
-| Operação                | Método e caminho                                                 | Observações                                                                                     |
-| ----------------------- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| Dispositivos acessíveis | `GET /api/user/devices`                                          | `page` começa em `0`; `pageSize` é obrigatório; resposta `PageData<Device>`                     |
-| Chaves de telemetria    | `GET /api/plugins/telemetry/DEVICE/{deviceId}/keys/timeseries`   | `deviceId` é UUID                                                                               |
-| Últimos valores         | `GET /api/plugins/telemetry/DEVICE/{deviceId}/values/timeseries` | `keys` e `useStrictDataTypes=true`                                                              |
-| Histórico               | mesmo caminho de valores                                         | `keys`, `startTs`, `endTs`, `limit`, `agg=NONE`, `orderBy=ASC`; timestamps UTC em milissegundos |
+| Operação                 | Método e caminho                                                 | Observações                                                                                     |
+| ------------------------ | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Dispositivos acessíveis  | `GET /api/user/devices`                                          | `page` começa em `0`; `pageSize` é obrigatório; resposta `PageData<Device>`                     |
+| Atributos do dispositivo | `GET /api/plugins/telemetry/DEVICE/{deviceId}/values/attributes` | Consulta diagnóstica; nos dois dispositivos acessíveis não houve atributo MAC.                  |
+| Chaves de telemetria     | `GET /api/plugins/telemetry/DEVICE/{deviceId}/keys/timeseries`   | `deviceId` vem da lista de dispositivos; não é informado no cadastro.                           |
+| Últimos valores          | `GET /api/plugins/telemetry/DEVICE/{deviceId}/values/timeseries` | `keys` e `useStrictDataTypes=true`; a chave real `mac` permite conferir o aparelho.             |
+| Histórico                | mesmo caminho de valores                                         | `keys`, `startTs`, `endTs`, `limit`, `agg=NONE`, `orderBy=ASC`; timestamps UTC em milissegundos |
 
-A autenticação confirmada é `X-Authorization: Bearer <JWT>`. O JWT copiado em **Account > Security** é usado diretamente pelo Worker como `MONITORIE_JWT`. O projeto não envia usuário/senha, não usa `Authorization` comum e não implementa login ou refresh automático. Um JWT ausente, expirado, revogado ou sem permissão produz erro controlado e não afeta as contas do Hidra.
+A autenticação de leitura confirmada é `X-Authorization: Bearer <JWT>`. Com `MONITORIE_USERNAME` e `MONITORIE_PASSWORD` configurados como secrets do Worker, o backend faz `POST /api/auth/login`, guarda o par de tokens cifrado e chama `POST /api/auth/token` antes do vencimento. O refresh devolve novos valores e pode rotacionar o refreshToken. Um refresh rejeitado por 400/401/403 provoca uma única tentativa de login; falhas de rede e respostas inválidas encerram a tentativa com erro genérico. Se ambas as credenciais estiverem ausentes, `MONITORIE_JWT` continua aceito para compatibilidade manual e expira normalmente. Uma configuração parcial de usuário/senha falha fechada.
+
+O JWT retornado pela MonitorIE fornece `exp` quando presente. O backend usa o menor prazo entre `exp` e 20 minutos contados da resposta e renova com margem de 2 minutos. A duração de 20 minutos foi informada pela equipe da MonitorIE; ela pode diferir do padrão geral do ThingsBoard. A renovação ocorre na próxima consulta, sem chamadas de fundo quando o painel está inativo. Um lease no D1 permite apenas um login ou refresh em andamento entre instâncias; os demais pedidos aguardam o novo par. Se a consulta de telemetria receber 401, o próximo pedido permitido pelo gate tenta renovar o token.
+
+Em 29/09/2026, uma chamada controlada a `/api/auth/token` com token artificial recebeu **401** da instância, confirmando a existência da rota sem usar credenciais reais. [Um mantenedor do ThingsBoard](https://github.com/thingsboard/thingsboard/issues/12371) documenta o POST com `refreshToken` e a resposta com `token` e `refreshToken`, inclusive a ausência dessa rota no Swagger de versões anteriores. O refresh **bem-sucedido na conta MonitorIE deste projeto ainda depende de configurar usuário/senha no backend**; o ciclo completo está coberto por testes com respostas simuladas.
 
 O cliente aceita somente a origem HTTPS fixa `monitorie.com.br`, rejeita redirects, limita respostas a 1 MiB, usa timeout de 10 segundos e mapeia 401, 403, 404, 429, 5xx, timeout e resposta inválida sem repassar corpo ou detalhes internos.
 
-## Descoberta local sem expor o JWT
+## Configuração local sem expor credenciais
 
-Crie `.dev.vars` localmente (o arquivo é ignorado pelo Git) e preencha o JWT fora da conversa:
+Crie `.dev.vars` localmente (ignorado pelo Git). Para autenticação contínua, preencha o usuário e a senha da MonitorIE diretamente nesse arquivo. O `SESSION_SECRET` local já é gerado no armazenamento privado do runtime:
 
 ```dotenv
-MONITORIE_JWT=
+MONITORIE_USERNAME=
+MONITORIE_PASSWORD=
 MONITORIE_SMWU_MAPPING=
 MONITORIE_SMWA_MAPPING=
 ```
 
-Nunca use `VITE_`, `NEXT_PUBLIC_`, `PUBLIC_` ou argumento de linha de comando para o token. O utilitário abaixo lê `.dev.vars`, faz exatamente uma chamada de leitura por execução e não imprime o JWT:
+Não use `VITE_`, `NEXT_PUBLIC_`, `PUBLIC_` ou argumento de linha de comando para credenciais. `npm run dev:monitorie` lê essas variáveis só no backend; reinicie o processo depois de alterá-las. O cache cifrado fica em `monitorie_auth_cache` no D1 local, sem copiar tokens para as tabelas de telemetria.
+
+O diagnóstico manual abaixo ainda aceita `MONITORIE_JWT` em `.dev.vars` e faz exatamente uma chamada de **leitura** por execução. Ele não executa login ou refresh e não imprime o JWT. Se optar por esse modo legado, copie o JWT sem exibi-lo e limpe a área de transferência:
 
 No PowerShell, depois de usar **Copy JWT token** na página, salve-o sem exibi-lo e limpe a área de transferência:
 
@@ -40,12 +48,16 @@ Se o navegador usar uma área de transferência isolada, execute `npm run monito
 
 ```sh
 npm run monitorie:probe -- devices --page 0
-npm run monitorie:probe -- keys --device-id UUID_CONFIRMADO
-npm run monitorie:probe -- latest --device-id UUID_CONFIRMADO --keys chave1,chave2
-npm run monitorie:probe -- history --device-id UUID_CONFIRMADO --keys chave1,chave2 --hours 24 --limit 500
+npm run monitorie:probe -- structure --page 0
+npm run monitorie:probe -- attributes --device-id ID_RETORNADO_PELA_LISTA
+npm run monitorie:probe -- keys --device-id ID_RETORNADO_PELA_LISTA
+npm run monitorie:probe -- latest --device-id ID_RETORNADO_PELA_LISTA --keys chave1,chave2
+npm run monitorie:probe -- history --device-id ID_RETORNADO_PELA_LISTA --keys chave1,chave2 --hours 24 --limit 500
 ```
 
 Respeite pelo menos 70 segundos entre execuções enquanto o limite informado pelo suporte não for formalmente detalhado. As consultas são somente leitura; não alteram dispositivos, alarmes ou configurações.
+O comando `attributes` mostra os nomes das chaves de atributos e os valores apenas das chaves de MAC reconhecidas; oculta os demais valores retornados.
+O comando `structure` mostra nomes de campos e caminhos de valores com formato de MAC na lista, sem mostrar os demais valores.
 
 ## Mapeamento explícito de chaves e classificação de unidades
 
@@ -101,7 +113,19 @@ Chaves desconhecidas, unidades não suportadas, duplicação de key e timestamps
 
 ## Execução ponta a ponta local
 
-Depois de confirmar IDs, keys e unidades, grave os mappings em `.dev.vars`, provisione no D1 local um dispositivo `source='monitorie'` cujo `external_id` seja o UUID confirmado e execute:
+O cadastro administrativo de SM-WU e SM-WA pede modelo, MAC e fonte. O MAC é salvo em `mac_address` no formato `AA:BB:CC:DD:EE:FF`, com unicidade global; `device_code` continua obrigatório internamente e é gerado como `SMWU-AABBCCDDEEFF` ou `SMWA-AABBCCDDEEFF`. Códigos e associações de registros anteriores não são convertidos em MACs. A ação **Informar MAC** permite completar um registro legado somente depois de conferir o equipamento físico; o código interno antigo permanece estável. O MAC nunca é enviado como ID em chamadas à MonitorIE.
+
+Um dispositivo MonitorIE pode ser ativado e pareado antes da associação. O cliente informa MAC e código de ativação. Para registros antigos ainda sem MAC, o código existente continua válido sozinho. Sem associação, snapshot e histórico não fazem requisições ao fornecedor e retornam ausência de leituras; a interface informa **Telemetria não vinculada**. Transferências e ativações anteriores são preservadas.
+
+Em **Localizar telemetria pelo MAC**, o administrador avança uma consulta de leitura por etapa. A resposta real da MonitorIE em 23/09/2026 trouxe `mac` como chave de _telemetria_, enquanto os atributos e a lista de dispositivos não trouxeram MAC. O backend percorre a lista e lê o último valor de `mac` de cada dispositivo, respeitando o intervalo global de 70 segundos. Só associa quando o valor recente é exatamente o MAC cadastrado em um único dispositivo da lista completa e o modelo também corresponde. Nomes parecidos não contam como prova. Se o MAC faltar, aparecer em mais de um dispositivo ou pertencer a outro modelo, o equipamento continua sem telemetria vinculada. O identificador retornado pelo fornecedor fica interno ao backend e não é pedido no cadastro.
+
+Se o MAC ou modelo de um equipamento MonitorIE já identificado for corrigido depois, a associação de telemetria é desfeita e precisa de nova descoberta pelo MAC. A correção de MAC desconhecido em registro legado preserva o vínculo preexistente.
+
+No primeiro pareamento, o painel pode mostrar o último estado real conhecido, mesmo que a medição seja anterior ao cadastro. Em transferências, medições anteriores ao novo vínculo continuam ocultas para o novo titular; o histórico também começa no vínculo.
+
+No painel, o SM-WA apresenta vazão instantânea e consumo acumulado reportados pela nuvem. Quando há pelo menos duas leituras após o pareamento, o consumo no período é a soma das diferenças positivas do contador acumulado; uma redução do contador é tratada como reinício e não como consumo. O SM-WU mantém o cálculo pela redução do volume do reservatório. Sem histórico suficiente, os gráficos indicam falta de dados em vez de estimar valores.
+
+Depois de confirmar as chaves e unidades, grave os mappings em `.dev.vars`, faça a descoberta pelo MAC no painel administrativo e execute:
 
 ```sh
 npm run dev:monitorie
@@ -109,24 +133,26 @@ npm run dev:monitorie
 
 Esse modo é opt-in. O `npm run dev` comum continua usando mock local e bloqueia rede externa. O frontend local permanece em `http://127.0.0.1:8788`, chama o Worker em `http://127.0.0.1:8787` e mantém os estados já existentes de carregamento, ausência de dados e erro.
 
-O D1 já possui `telemetry_cache` e `settings`; não é necessária migration nova. O cache evita chamadas repetidas e o gate D1 preserva um intervalo global conservador de 70 segundos. Nenhuma leitura da Monitor IE é copiada para as tabelas de ingestão local ou para MySQL legado.
+O D1 possui `telemetry_cache`, `settings` e, após a migration aditiva `0007_monitorie_auth_cache.sql`, `monitorie_auth_cache`. O primeiro guarda leituras temporárias, o segundo preserva o gate global de 70 segundos e o terceiro guarda apenas o par de tokens cifrado e o lease de renovação. Nenhuma leitura da Monitor IE é copiada para as tabelas de ingestão local ou para MySQL legado.
 
 ## Cloudflare Worker
 
-Somente depois da validação local e com autorização para alterar o ambiente remoto, insira o JWT pelo prompt seguro:
+Somente depois da validação local e com autorização para alterar o ambiente remoto, aplique a migration `0007_monitorie_auth_cache.sql` e configure as credenciais pelo prompt seguro do Wrangler:
 
 ```sh
-node scripts/cloudflare/wrangler.mjs secret put MONITORIE_JWT
-node scripts/cloudflare/wrangler.mjs secret put MONITORIE_JWT --env preview
+node scripts/cloudflare/wrangler.mjs secret put MONITORIE_USERNAME
+node scripts/cloudflare/wrangler.mjs secret put MONITORIE_PASSWORD
+node scripts/cloudflare/wrangler.mjs secret put MONITORIE_USERNAME --env preview
+node scripts/cloudflare/wrangler.mjs secret put MONITORIE_PASSWORD --env preview
 ```
 
-Configure os mappings confirmados como bindings do Worker sem colocá-los no frontend. Mantenha `MONITORIE_MODE=unconfigured` até o JWT, o UUID e o mapping do modelo estarem validados; então use `MONITORIE_MODE=live`. Produção e preview devem ter credenciais e D1 separados.
+Configure os mappings confirmados como bindings do Worker sem colocá-los no frontend. Mantenha `MONITORIE_MODE=unconfigured` até as credenciais, a correspondência exata de MAC e o mapping do modelo estarem validados; então use `MONITORIE_MODE=live`. Produção e preview devem ter credenciais, `SESSION_SECRET` e D1 separados. A rotação de `SESSION_SECRET` invalida somente o cache cifrado e provoca novo login.
 
-JWTs da página Account > Security expiram. Quando isso ocorrer, copie um novo token e substitua o secret. Não existe renovação automática nesta integração porque esse fluxo não foi solicitado nem comprovado para o token fornecido.
+`MONITORIE_JWT` permanece como opção manual quando usuário/senha não forem configurados. Esse modo não renova o token. A implementação não altera a duração global dos JWTs na plataforma MonitorIE.
 
-## Comprovação real concluída em produção
+## Registros anteriores de validação real
 
-A integração real com a Monitor IE foi comprovada e validada ponta a ponta:
+Registros anteriores do projeto relatam validação da integração com a MonitorIE. Eles não comprovam, por si, a correspondência do MAC de um novo equipamento com o dispositivo remoto:
 
 - Dispositivo **SM-WU** confirmado com as chaves: `d` (cm), `nivel` (%), `volume` (L) e `rssi_wifi` (dBm).
 - Dispositivo **SM-WA** confirmado com as chaves: `vazao` (L/h), `consumo` (L) e `rssi_wifi` (dBm).

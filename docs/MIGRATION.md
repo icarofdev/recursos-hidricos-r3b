@@ -57,7 +57,7 @@ Novo GET `/api/auth/csrf` inicia uma sessão anônima para clientes que não car
 
 ## Decisões e diferenças justificadas
 
-- Intervalo inicial da tela passa de 5 para 60 segundos; opções rápidas continuam disponíveis. Snapshot reduz três requisições a uma. Cache da integração é independente do intervalo da tela.
+- Intervalo inicial da tela passa de 5 para 75 segundos para respeitar a trava global de 70 segundos da MonitorIE. Snapshot reduz três requisições a uma. Cache da integração é independente do intervalo da tela.
 - Ingestão por token na query é desativada: tokens em URLs podem entrar em logs. Usar Authorization ou X-Device-Token em HTTPS. Firmware somente HTTP deve usar Monitorie; gateway local não faz parte da arquitetura final.
 - Histórico remoto só pode começar no vínculo atual: a nova conta não recebe histórico do proprietário anterior.
 - Datas da nova API são ISO 8601 UTC; a interface já as formata no fuso do navegador.

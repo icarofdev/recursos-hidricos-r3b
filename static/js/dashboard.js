@@ -104,6 +104,12 @@ function renderConnection() {
     return;
   }
 
+  if (dashboardState.device.telemetry_linked === false) {
+    setStatusDot(dot, 'is-waiting');
+    label.textContent = 'Telemetria não vinculada';
+    return;
+  }
+
   if (isDeviceDisconnected()) {
     setStatusDot(dot, 'is-error');
     label.textContent = 'Offline';
@@ -156,6 +162,14 @@ function renderSystemStatus() {
     description.textContent =
       'A leitura pode estar visível, mas o estado de conexão não pôde ser confirmado.';
     retryButton.hidden = false;
+    return;
+  }
+
+  if (dashboardState.device?.telemetry_linked === false) {
+    container.classList.add('is-neutral');
+    title.textContent = 'Telemetria não vinculada';
+    description.textContent =
+      'Equipamento cadastrado e pareado. A associação ao ID real da MonitorIE ainda está pendente.';
     return;
   }
 
@@ -234,7 +248,7 @@ function renderLatest() {
   const sensorId = getMonitoredDeviceId();
 
   if (isSMWA) {
-    document.documentElement.style.setProperty('--water-level', '50%');
+    document.documentElement.style.setProperty('--water-level', '0%');
     signalVisual.setAttribute(
       'aria-label',
       vazao === null
@@ -293,6 +307,39 @@ function renderLatest() {
   getElement('metric-timestamp').textContent = formatDateTime(latest.timestamp, true);
 }
 
+function renderDevicePresentation() {
+  const isSMWA = getSelectedReservoir()?.device?.type === 'SM-WA';
+  getElement('reservoir-title').textContent = isSMWA ? 'Leitura do hidrômetro' : 'Nível do reservatório';
+  getElement('tank-area').hidden = isSMWA;
+  getElement('level-track').hidden = isSMWA;
+  getElement('capacity-reading-row').hidden = isSMWA;
+  getElement('capacity-form').hidden = isSMWA;
+  getElement('reservoir-select-label').textContent = isSMWA ? 'Equipamento' : 'Reservatório';
+  getElement('reservoir-select').setAttribute('aria-label', isSMWA ? 'Selecionar equipamento' : 'Selecionar reservatório');
+  getElement('rename-reservoir').textContent = isSMWA ? 'Renomear equipamento' : 'Renomear reservatório';
+  getElement('primary-reading-label').textContent = isSMWA ? 'Vazão atual' : 'Nível atual';
+  getElement('flow-reading-label').textContent = isSMWA ? 'Consumo acumulado' : 'Volume atual';
+  getElement('wifi-reading-label').textContent = isSMWA ? 'Volume reportado' : 'Distância do sensor';
+  getElement('flow-metric-label').textContent = isSMWA ? 'Vazão medida' : 'Distância medida';
+  getElement('chart-title').textContent = isSMWA ? 'Histórico do hidrômetro' : 'Comportamento do reservatório';
+  getElement('chart-description').textContent = isSMWA
+    ? 'Acompanhe as leituras registradas pelo SM-WA.'
+    : 'Acompanhe as variações registradas pelo SM-WU.';
+  getElement('primary-chart-tab-label').textContent = isSMWA ? 'Acumulado' : 'Nível';
+  getElement('consumption-chart-tab-label').textContent = isSMWA ? 'No período' : 'Consumo';
+  getElement('history-chart').setAttribute(
+    'aria-label',
+    isSMWA ? 'Gráfico das leituras do SM-WA ao longo do tempo' : 'Gráfico das leituras do SM-WU ao longo do tempo',
+  );
+  getElement('calculation-note').textContent = isSMWA
+    ? 'Consumo no período calculado pela diferença positiva entre leituras consecutivas do contador acumulado.'
+    : 'Consumo estimado localmente pela soma das reduções entre leituras consecutivas de volume.';
+  getElement('detail-ppl-label').textContent = isSMWA ? 'Vazão' : 'Nível';
+  getElement('detail-vazao-label').textContent = isSMWA ? 'Consumo acumulado' : 'Distância';
+  getElement('detail-rssi-label').textContent = 'Volume';
+  document.querySelector('.reservoir-content')?.classList.toggle('is-meter', isSMWA);
+}
+
 function renderMetrics() {
   const latest = dashboardState.latest;
   const device = dashboardState.device;
@@ -330,18 +377,28 @@ function renderMetrics() {
     if (label3) label3.textContent = 'Volume';
     getElement('daily-consumption-reading').textContent = volume === null ? '—' : formatNumber(volume, 2);
     getElement('daily-consumption-unit').textContent = volume === null ? '' : unit('volume');
-    getElement('daily-consumption-context').textContent = 'Estimativa de volume';
+    getElement('daily-consumption-context').textContent =
+      volume === null ? 'Volume não informado' : 'Volume reportado pelo SM-WA';
 
     const label4 = document
       .querySelector('#level-state-reading')
       ?.closest('.metric-card')
       ?.querySelector('.metric-label');
     if (label4) label4.textContent = 'Estado do medidor';
-    getElement('level-state-reading').textContent = device?.status === 'online' ? 'Operando' : 'Offline';
+    getElement('level-state-reading').textContent =
+      device?.telemetry_linked === false
+        ? 'Não vinculada'
+        : device?.status === 'online'
+          ? 'Operando'
+          : 'Offline';
     getElement('level-state-reading').className =
       `metric-status ${device?.status === 'online' ? 'is-good' : 'is-critical'}`;
     getElement('level-state-context').textContent =
-      device?.status === 'online' ? 'Comunicação regular SM-WA' : 'Sem sinal recente';
+      device?.telemetry_linked === false
+        ? 'Telemetria não vinculada à MonitorIE'
+        : device?.status === 'online'
+          ? 'Comunicação regular SM-WA'
+          : 'Sem sinal recente';
 
     getElement('flow-metric').textContent =
       vazao === null ? '—' : `${formatNumber(vazao, 2)} ${unit('vazao')}`;
@@ -440,6 +497,18 @@ function renderMetrics() {
 function renderInsights() {
   const container = getElement('insights-list');
   const history = getRangeHistory();
+  if (getSelectedReservoir()?.device?.type === 'SM-WA') {
+    if (dashboardState.historyError) {
+      container.innerHTML =
+        '<div class="empty-state"><span class="empty-state-icon" aria-hidden="true">!</span><strong>Análise indisponível</strong><span>Não foi possível consultar o histórico deste período.</span></div>';
+      return;
+    }
+    const consumption = getConsumptionSeries(history);
+    container.innerHTML = consumption.available
+      ? `<article class="insight-item"><span class="insight-index" aria-hidden="true">1</span><div><strong>Consumo no período</strong><p>${escapeHTML(formatNumber(consumption.total, 2))} L em ${consumption.intervals} intervalos analisados.</p></div></article>`
+      : '<div class="empty-state"><span class="empty-state-icon" aria-hidden="true">—</span><strong>Dados insuficientes</strong><span>São necessárias duas leituras do contador acumulado para calcular o consumo no período.</span></div>';
+    return;
+  }
   const levelRows = history.filter((item) => toFiniteNumber(item.nivel) !== null);
 
   if (dashboardState.historyError) {
@@ -534,7 +603,12 @@ function normalizeAlerts() {
     sensorId: alert.id || sensorId,
   }));
 
-  if (!dashboardState.statusError && dashboardState.device && isDeviceDisconnected()) {
+  if (
+    !dashboardState.statusError &&
+    dashboardState.device &&
+    dashboardState.device.telemetry_linked !== false &&
+    isDeviceDisconnected()
+  ) {
     alerts.push({
       type: 'critical',
       title: 'Dispositivo offline',
@@ -591,7 +665,7 @@ function renderAlerts() {
             <article class="alert-item is-${escapeHTML(alert.type)}">
                 <span class="alert-severity" aria-hidden="true">${alert.type === 'critical' ? '!' : alert.type === 'warning' ? '△' : 'i'}</span>
                 <div class="alert-copy"><strong>${escapeHTML(alert.title)}</strong><p>${escapeHTML(alert.message)}</p></div>
-                <div class="alert-meta"><span>${escapeHTML(alert.timestamp ? formatDateTime(alert.timestamp) : 'Sem horário')}</span><span>SM-WU · ${escapeHTML(alert.sensorId)}</span><span class="alert-state">${category}</span></div>
+                <div class="alert-meta"><span>${escapeHTML(alert.timestamp ? formatDateTime(alert.timestamp) : 'Sem horário')}</span><span>${getSelectedReservoir()?.device?.type === 'SM-WA' ? 'SM-WA' : 'SM-WU'} · ${escapeHTML(alert.sensorId)}</span><span class="alert-state">${category}</span></div>
             </article>
         `;
     })
@@ -639,22 +713,28 @@ function renderDevice() {
   const disconnected = !dashboardState.statusError && device ? isDeviceDisconnected() : null;
   const stateLabel = dashboardState.statusError
     ? 'Indisponível'
-    : !device
-      ? 'Sem status'
-      : disconnected
-        ? 'Offline'
-        : 'Online';
+    : device?.telemetry_linked === false
+      ? 'Telemetria não vinculada'
+      : !device
+        ? 'Sem status'
+        : disconnected
+          ? 'Offline'
+          : 'Online';
   getElement('devices-count').textContent =
     `${dashboardState.reservoirs.length} ${dashboardState.reservoirs.length === 1 ? 'conectado' : 'conectados'}`;
   getElement('device-name').textContent =
-    `Sensor ${reservoir?.name || 'Reservatório'} · ${reservoir?.device?.code || `ID ${sensorId}`}`;
+    `${reservoir?.device?.type === 'SM-WA' ? 'Medidor' : 'Sensor'} ${reservoir?.name || 'Reservatório'} · ${reservoir?.device?.code || `ID ${sensorId}`}`;
   getElement('device-status').textContent = stateLabel;
   getElement('device-last-seen').textContent = lastSeen
     ? `${formatDateTime(lastSeen, true)} · ${formatElapsed(lastSeen)}`
     : 'Sem comunicação registrada';
   setStatusDot(
     getElement('device-dot'),
-    dashboardState.statusError || disconnected ? 'is-error' : device ? '' : 'is-waiting',
+    dashboardState.statusError || (disconnected && device?.telemetry_linked !== false)
+      ? 'is-error'
+      : device
+        ? ''
+        : 'is-waiting',
   );
   statusBadge.className =
     `device-status-badge ${dashboardState.statusError || disconnected ? 'is-waiting' : ''}`.trim();
@@ -778,6 +858,7 @@ function renderHistoryTable() {
 }
 
 function renderAll({ includeHistory = true } = {}) {
+  renderDevicePresentation();
   renderConnection();
   renderSystemStatus();
   renderLatest();
@@ -965,10 +1046,30 @@ async function selectReservoir(reservoirId) {
 async function updateDashboard() {
   const id = dashboardState.selectedReservoirId;
   if (dashboardState.updateInProgress || !id || document.hidden) return;
-  const last = dashboardState.snapshotLastStarted.get(id) || 0;
-  if (Date.now() - last < 60000) return;
-  dashboardState.snapshotLastStarted.set(id, Date.now());
+  if (
+    dashboardState.historyVisible &&
+    shouldRefreshFullHistory() &&
+    (!dashboardState.historyError || dashboardState.lastMonitorieRequestType !== 'history')
+  )
+    dashboardState.historyRequestPending = true;
+  const now = Date.now();
+  if (now - dashboardState.lastMonitorieRequestStarted < 70000) return;
   dashboardState.updateInProgress = true;
+  if (dashboardState.historyRequestPending) {
+    dashboardState.lastMonitorieRequestStarted = now;
+    dashboardState.lastMonitorieRequestType = 'history';
+    dashboardState.historyRequestPending = false;
+    try {
+      await updateHistoryForRange();
+    } finally {
+      dashboardState.updateInProgress = false;
+      renderAll();
+    }
+    return;
+  }
+  dashboardState.snapshotLastStarted.set(id, now);
+  dashboardState.lastMonitorieRequestStarted = now;
+  dashboardState.lastMonitorieRequestType = 'snapshot';
   try {
     const value = requireSuccessfulPayload(
       await requestJSON(reservoirEndpoint(API_ENDPOINTS.snapshot)),
@@ -983,7 +1084,6 @@ async function updateDashboard() {
     dashboardState.latestError = dashboardState.statusError = dashboardState.alertsError = false;
     const banner = document.querySelector('.demo-banner');
     if (banner) banner.hidden = !value.simulated;
-    if (dashboardState.historyVisible && shouldRefreshFullHistory()) await updateHistoryForRange();
   } catch {
     if (id !== dashboardState.selectedReservoirId) return;
     dashboardState.apiAvailable = false;
@@ -1154,6 +1254,7 @@ function bindModals() {
 
 function openPairing(trigger) {
   dashboardState.pairingCode = null;
+  dashboardState.pairingMac = null;
   getElement('pairing-step-code').hidden = false;
   getElement('pairing-step-confirm').hidden = true;
   getElement('pairing-code-form').reset();
@@ -1174,23 +1275,34 @@ function bindPairing() {
     const button = form.querySelector('button[type="submit"]');
     const feedback = getElement('pairing-code-feedback');
     const code = getElement('pairing-code').value.trim().toUpperCase();
+    const mac = getElement('pairing-mac').value.trim();
     feedback.textContent = '';
     button.disabled = true;
     try {
       const payload = requireSuccessfulPayload(
         await requestJSON(API_ENDPOINTS.validatePairing, {
           method: 'POST',
-          body: { pairing_code: code },
+          body: { pairing_code: code, mac_address: mac },
         }),
         'validate-pairing',
       );
       dashboardState.pairingCode = code;
+      dashboardState.pairingMac = mac;
       getElement('pairing-device-code').textContent = payload.data.device_code || 'Hidra R3B';
       const online = payload.data.status === 'online';
-      setStatusDot(getElement('pairing-device-dot'), online ? '' : 'is-error');
-      getElement('pairing-device-status').textContent = online
-        ? `Online · última comunicação ${formatElapsed(payload.data.last_seen)}`
-        : `Offline · última comunicação ${formatElapsed(payload.data.last_seen)}`;
+      setStatusDot(
+        getElement('pairing-device-dot'),
+        payload.data.telemetry_linked === false ? 'is-waiting' : online ? '' : 'is-error',
+      );
+      getElement('pairing-device-status').textContent =
+        payload.data.telemetry_linked === false
+          ? 'Telemetria não vinculada à MonitorIE'
+          : online
+            ? `Online · última comunicação ${formatElapsed(payload.data.last_seen)}`
+            : `Offline · última comunicação ${formatElapsed(payload.data.last_seen)}`;
+      const isSMWA = payload.data.device_type === 'SM-WA';
+      getElement('pairing-name-label').textContent = isSMWA ? 'Nome do equipamento' : 'Nome do reservatório';
+      getElement('pairing-reservoir-name').placeholder = isSMWA ? 'Ex.: Hidrômetro principal' : 'Ex.: Reservatório principal';
       getElement('pairing-step-code').hidden = true;
       getElement('pairing-step-confirm').hidden = false;
       getElement('pairing-reservoir-name').focus();
@@ -1220,6 +1332,7 @@ function bindPairing() {
           method: 'POST',
           body: {
             pairing_code: dashboardState.pairingCode,
+            mac_address: dashboardState.pairingMac,
             reservoir_name: getElement('pairing-reservoir-name').value,
           },
         }),
@@ -1268,7 +1381,10 @@ function bindReservoirManagement() {
   getElement('rename-reservoir').addEventListener('click', (event) => {
     const reservoir = getSelectedReservoir();
     if (!reservoir) return;
-    getElement('management-title').textContent = 'Renomear reservatório';
+    getElement('management-title').textContent =
+      reservoir.device?.type === 'SM-WA' ? 'Renomear equipamento' : 'Renomear reservatório';
+    getElement('management-eyebrow').textContent =
+      reservoir.device?.type === 'SM-WA' ? 'Equipamento' : 'Reservatório';
     getElement('management-description').textContent = 'O novo nome será atualizado em toda a dashboard.';
     getElement('rename-input').value = reservoir.name;
     getElement('rename-feedback').textContent = '';
@@ -1414,7 +1530,8 @@ function bindChartControls() {
         item.classList.toggle('is-active', active);
         item.setAttribute('aria-pressed', String(active));
       });
-      void updateHistoryForRange();
+      dashboardState.historyRequestPending = true;
+      void updateDashboard();
     });
   });
 
@@ -1454,7 +1571,7 @@ function bindDeviceDetails() {
 
 function bindRefreshControls() {
   getElement('refresh-interval').addEventListener('change', (event) => {
-    dashboardState.refreshMilliseconds = Math.max(60000, Number(event.target.value) || 60000);
+    dashboardState.refreshMilliseconds = Math.max(75000, Number(event.target.value) || 75000);
     const seconds = dashboardState.refreshMilliseconds / 1000;
     getElement('refresh-rate-label').textContent = `a cada ${seconds} segundos`;
     resetRefreshTimer();
@@ -1527,8 +1644,10 @@ async function loadCurrentUser() {
 document.addEventListener('DOMContentLoaded', async () => {
   const historyObserver = new IntersectionObserver((entries) => {
     dashboardState.historyVisible = entries.some((entry) => entry.isIntersecting);
-    if (dashboardState.historyVisible && dashboardState.selectedReservoirId && shouldRefreshFullHistory())
-      void updateHistoryForRange();
+    if (dashboardState.historyVisible && dashboardState.selectedReservoirId && shouldRefreshFullHistory()) {
+      dashboardState.historyRequestPending = true;
+      void updateDashboard();
+    }
   });
   historyObserver.observe(getElement('monitoramento'));
   initializeCharts();

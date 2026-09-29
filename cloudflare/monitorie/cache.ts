@@ -57,7 +57,15 @@ export async function remoteSnapshot(c: Context, row: ReservoirRow): Promise<Sna
       throw invalidData();
     if (result.data) {
       validateReading(result.data, row.device_id, row.device_type);
-      if (Date.parse(result.data.timestamp) < row.linked_at * 1000) result.data = null;
+      if (Date.parse(result.data.timestamp) < row.linked_at * 1000) {
+        // O primeiro titular pode ver o último estado conhecido, mesmo que o
+        // dispositivo esteja desligado ao parear. Em transferências, uma
+        // medição anterior ao novo vínculo permanece privada.
+        const earlierLink = await c.env.DB.prepare(
+          'SELECT 1 FROM reservoirs WHERE device_id=? AND id<>? LIMIT 1',
+        ).bind(row.device_id, row.id).first();
+        if (earlierLink) result.data = null;
+      }
     }
     return result;
   });

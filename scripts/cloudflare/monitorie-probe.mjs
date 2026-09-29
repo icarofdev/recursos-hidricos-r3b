@@ -17,9 +17,9 @@ function required(name) {
 }
 
 const command = process.argv[2];
-if (!['devices', 'keys', 'latest', 'history'].includes(command)) {
+if (!['devices', 'structure', 'attributes', 'keys', 'latest', 'history'].includes(command)) {
   console.error(
-    'Uso: npm run monitorie:probe -- devices [--page 0] | keys --device-id UUID | latest|history --device-id UUID --keys chave1,chave2',
+    'Uso: npm run monitorie:probe -- devices|structure [--page 0] | attributes|keys --device-id ID_DA_LISTA | latest|history --device-id ID_DA_LISTA --keys chave1,chave2',
   );
   process.exitCode = 2;
 } else {
@@ -50,11 +50,42 @@ if (!['devices', 'keys', 'latest', 'history'].includes(command)) {
     };
     const client = new module.MonitorieReadClient(async () => jwt, gate);
     let result;
-    if (command === 'devices') {
+    if (command === 'structure') {
+      const page = positiveInteger('page', 0, 100000);
+      const query = new URLSearchParams({ page: String(page), pageSize: '100', sortProperty: 'name', sortOrder: 'ASC' });
+      const response = await fetch(`https://monitorie.com.br/api/user/devices?${query}`, {
+        method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(10000),
+        headers: { 'X-Authorization': `Bearer ${jwt}`, Accept: 'application/json' },
+      });
+      if (!response.ok || response.status >= 300 || !response.headers.get('Content-Type')?.includes('application/json'))
+        throw new Error('Resposta da lista indisponível ou inválida.');
+      const raw = await response.json();
+      if (!Array.isArray(raw?.data) || raw.data.length > 100) throw new Error('Lista inválida.');
+      const macPattern = /^(?:(?:[0-9a-f]{2}:){5}[0-9a-f]{2}|(?:[0-9a-f]{2}-){5}[0-9a-f]{2}|[0-9a-f]{12})$/i;
+      const macPaths = (value, path = '', depth = 0) => {
+        if (typeof value === 'string') return macPattern.test(value) ? [path] : [];
+        if (!value || typeof value !== 'object' || depth >= 5) return [];
+        return Object.entries(value).flatMap(([key, item]) => macPaths(item, `${path}.${key}`, depth + 1));
+      };
+      result = raw.data.map((device) => ({
+        id: device?.id?.id ?? null,
+        fields: Object.keys(device),
+        additional_info_fields: device?.additionalInfo && typeof device.additionalInfo === 'object'
+          ? Object.keys(device.additionalInfo) : [],
+        mac_value_paths: macPaths(device),
+      }));
+    } else if (command === 'devices') {
       result = await client.devices(positiveInteger('page', 0, 100000), 100);
     } else {
       const deviceId = required('device-id');
-      if (command === 'keys') result = await client.keys(deviceId);
+      if (command === 'attributes') {
+        const attributes = await client.attributes(deviceId);
+        result = { keys: attributes.map(({ key }) => key), mac_attributes: attributes
+          .filter(({ key }) => ['mac', 'macaddress', 'wifimac', 'wifimacaddress'].includes(key.toLowerCase().replace(/[^a-z0-9]/g, '')))
+          .map(({ key, value }) => ({ key, value: typeof value === 'string' && /^(?:(?:[0-9a-f]{2}:){5}[0-9a-f]{2}|(?:[0-9a-f]{2}-){5}[0-9a-f]{2}|[0-9a-f]{12})$/i.test(value)
+            ? value.toUpperCase() : '[formato não reconhecido]' })) };
+      }
+      else if (command === 'keys') result = await client.keys(deviceId);
       else {
         const keys = required('keys')
           .split(',')

@@ -31,7 +31,9 @@ const fromLocalWA = (row: LocalSMWAReading): SMWAReading => ({
 
 async function snapshot(c: Context, row: ReservoirRow): Promise<Snapshot> {
   let result: Snapshot;
-  if (row.source !== 'local') result = await remoteSnapshot(c, row);
+  if (row.source === 'monitorie' && row.external_id === null)
+    result = { device: present(c, row).device as Snapshot['device'], data: null };
+  else if (row.source !== 'local') result = await remoteSnapshot(c, row);
   else if (row.device_type === 'SM-WA') {
     const reading = await c.env.DB.prepare(
       'SELECT * FROM smwa_readings WHERE reservoir_id=? ORDER BY created_at DESC,reading_id DESC LIMIT 1',
@@ -57,13 +59,14 @@ async function snapshot(c: Context, row: ReservoirRow): Promise<Snapshot> {
   const age =
     result.device.last_seen === null ? Infinity : now() - Date.parse(result.device.last_seen) / 1000;
   if (age >= result.device.offline_after_seconds) result.device.status = 'offline';
+  result.device.telemetry_linked = row.source !== 'monitorie' || row.external_id !== null;
   result.units = telemetryUnits(row.source, row.device_type, c.env);
   return result;
 }
 
 function alerts(value: Snapshot, row: ReservoirRow) {
   const data: { type: string; message: string; timestamp: string | null; id: number }[] = [];
-  if (value.device.status === 'offline')
+  if (value.device.status === 'offline' && value.device.telemetry_linked !== false)
     data.push({
       type: 'critical',
       message: 'Dispositivo sem comunicação dentro do limite configurado.',

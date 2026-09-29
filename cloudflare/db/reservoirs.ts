@@ -4,8 +4,9 @@ import { csrf, requireUser } from '../auth/sessions';
 import { sha256 } from '../auth/crypto';
 import { clientIP, rateLimit } from '../auth/rate-limit';
 import { auditStatement } from '../admin/audit';
+import { normalizeMac } from '../admin/device-identity';
 
-const select = `SELECT r.*,d.device_code,d.device_type,d.source,d.external_id,d.last_seen,d.reported_status
+const select = `SELECT r.*,d.device_code,d.mac_address,d.device_type,d.source,d.external_id,d.last_seen,d.reported_status
  FROM reservoirs r JOIN devices d ON d.id=r.device_id
  WHERE r.user_id=? AND d.owner_user_id=? AND r.unlinked_at IS NULL`;
 
@@ -27,13 +28,17 @@ export function present(c: Context, row: ReservoirRow) {
     linked_at: iso(row.linked_at),
     device: {
       id: row.device_id,
-      code: row.device_code,
+      code: row.mac_address ?? row.device_code,
       type: row.device_type,
+      telemetry_linked: row.source !== 'monitorie' || row.external_id !== null,
       status:
-        row.reported_status === 'online' && row.last_seen !== null && row.last_seen + threshold > now()
+        (row.source !== 'monitorie' || row.external_id !== null) &&
+        row.reported_status === 'online' &&
+        row.last_seen !== null &&
+        row.last_seen + threshold > now()
           ? 'online'
           : 'offline',
-      last_seen: iso(row.last_seen),
+      last_seen: row.source === 'monitorie' && row.external_id === null ? null : iso(row.last_seen),
       offline_after_seconds: threshold,
     },
   };
@@ -112,17 +117,21 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
   if (path === '/api/devices/validate-pairing' || path === '/api/devices/connect') {
     await rateLimit(c, 'pairing', clientIP(c), isLocal(c) ? 100 : 10, 600);
     const connect = path.endsWith('/connect');
-    const data = await body(c, connect ? ['pairing_code', 'reservoir_name'] : ['pairing_code']);
+    const data = await body(c, connect ? ['pairing_code', 'mac_address', 'reservoir_name'] : ['pairing_code', 'mac_address']);
     const code = string(data, 'pairing_code', 96).trim().toUpperCase();
+    const mac = data.mac_address === undefined || data.mac_address === '' ? null : normalizeMac(data.mac_address);
     const hash = await sha256(code);
     if (!connect) {
       const device = await c.env.DB.prepare(
-        'SELECT device_code,device_type,reported_status,last_seen FROM devices WHERE pairing_code_hash=? AND owner_user_id IS NULL AND pairing_expires_at>?',
+        'SELECT device_code,mac_address,device_type,source,external_id,reported_status,last_seen FROM devices WHERE pairing_code_hash=? AND owner_user_id IS NULL AND pairing_expires_at>? AND (mac_address=? OR (mac_address IS NULL AND ? IS NULL))',
       )
-        .bind(hash, now())
+        .bind(hash, now(), mac, mac)
         .first<{
           device_code: string;
+          mac_address: string | null;
           device_type: string;
+          source: string;
+          external_id: string | null;
           reported_status: string;
           last_seen: number | null;
         }>();
@@ -131,13 +140,18 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
       return json({
         success: true,
         data: {
-          device_code: device.device_code,
+          device_code: device.mac_address ?? device.device_code,
           device_type: device.device_type,
+          telemetry_linked: device.source !== 'monitorie' || device.external_id !== null,
           status:
-            device.last_seen && device.reported_status === 'online' && device.last_seen + threshold > now()
+            (device.source !== 'monitorie' || device.external_id !== null) &&
+            device.last_seen &&
+            device.reported_status === 'online' &&
+            device.last_seen + threshold > now()
               ? 'online'
               : 'offline',
-          last_seen: iso(device.last_seen),
+          last_seen:
+            device.source === 'monitorie' && device.external_id === null ? null : iso(device.last_seen),
         },
       });
     }
@@ -146,10 +160,10 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
     // INSERT SELECT + índice único + trigger impedem dois proprietários simultâneos.
     const result = await c.env.DB.prepare(
       `INSERT INTO reservoirs(user_id,device_id,name,linked_at,created_at,updated_at)
-   SELECT ?,id,?,?,?,? FROM devices WHERE pairing_code_hash=? AND owner_user_id IS NULL AND pairing_expires_at>?
+   SELECT ?,id,?,?,?,? FROM devices WHERE pairing_code_hash=? AND owner_user_id IS NULL AND pairing_expires_at>? AND (mac_address=? OR (mac_address IS NULL AND ? IS NULL))
    RETURNING id, device_id`,
     )
-      .bind(user.id, name, time, time, time, hash, time)
+      .bind(user.id, name, time, time, time, hash, time, mac, mac)
       .first<{ id: number; device_id: number }>();
     if (!result) throw pairingError();
 
@@ -164,5 +178,5 @@ function reservoirName(name: string): string {
   return normalized;
 }
 function pairingError() {
-  return new HttpError(422, 'INVALID_PAIRING_CODE', 'Código de ativação inválido, expirado ou já utilizado.');
+  return new HttpError(422, 'INVALID_PAIRING_CODE', 'MAC ou código de ativação inválido, expirado ou já utilizado.');
 }

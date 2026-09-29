@@ -14,6 +14,8 @@ let mf,
   db,
   sent = [],
   mailStatus = 201,
+  monitorieFixture = null,
+  monitorieRequests = [],
   ipCounter = 0;
 const keys = {
   SESSION_SECRET: randomBytes(32).toString('base64url'),
@@ -42,6 +44,50 @@ function options(overrides = {}) {
     log: new Log(LogLevel.NONE),
     serviceBindings: { ASSETS: () => new MFResponse('asset') },
     outboundService: async (request) => {
+      if (request.url.startsWith('https://monitorie.com.br/')) {
+        monitorieRequests.push(request.url);
+        assert.ok(monitorieFixture, 'MonitorIE não deve ser chamada sem fixture');
+        assert.equal(request.headers.get('X-Authorization'), `Bearer ${monitorieFixture.jwt}`);
+        const uri = new URL(request.url);
+        if (uri.pathname === '/api/user/devices') {
+          return new MFResponse(
+            JSON.stringify({
+              data: [
+                {
+                  id: { entityType: 'DEVICE', id: monitorieFixture.id },
+                  name: 'Equipamento confirmado',
+                  label: 'SM-WU',
+                  type: monitorieFixture.type ?? 'SM-WU',
+                },
+              ],
+              totalPages: 1,
+              totalElements: 1,
+              hasNext: false,
+            }),
+            { headers: { 'Content-Type': 'application/json' } },
+          );
+        }
+        if (uri.pathname.endsWith('/values/attributes')) {
+          return new MFResponse(JSON.stringify(monitorieFixture.attributes ?? []),
+            { headers: { 'Content-Type': 'application/json' } });
+        }
+        if (uri.pathname.endsWith('/values/timeseries')) {
+          const ts = monitorieFixture.readingTs ?? Date.now();
+          const data = Object.fromEntries(
+            (uri.searchParams.get('keys') || '').split(',').map((key) => [
+              key,
+              key === 'mac' && !monitorieFixture.mac ? [] : [
+                {
+                  ts,
+                  value: { mac: monitorieFixture.mac, d: 100, nivel: 50, volume: 500, rssi_wifi: -60, vazao: 12, consumo: 345 }[key],
+                },
+              ],
+            ]),
+          );
+          return new MFResponse(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
+        }
+        assert.fail(`Caminho MonitorIE inesperado: ${uri.pathname}`);
+      }
       assert.equal(
         request.url,
         'https://api.brevo.com/v3/smtp/email',
@@ -75,6 +121,8 @@ after(async () => {
 beforeEach(async () => {
   sent = [];
   mailStatus = 201;
+  monitorieFixture = null;
+  monitorieRequests = [];
   await freshDatabase();
 });
 
@@ -160,10 +208,10 @@ async function provision(
     .run();
   return code;
 }
-async function connect(client, code, name = 'Caixa principal') {
+async function connect(client, code, name = 'Caixa principal', macAddress = '') {
   const res = await client.request('/api/devices/connect', {
     method: 'POST',
-    data: { pairing_code: code, reservoir_name: name },
+    data: { pairing_code: code, mac_address: macAddress, reservoir_name: name },
   });
   const payload = await res.json();
   assert.equal(res.status, 201, JSON.stringify(payload));
@@ -753,40 +801,326 @@ test('cadastro administrativo de SM-WU e SM-WA, validação de unicidade e model
 
   const resWU = await admin.request('/api/admin/devices', {
     method: 'POST',
-    data: { device_type: 'SM-WU', device_code: 'SMWU-001', external_id: 'mon_wu_1', source: 'monitorie' },
+    data: { device_type: 'SM-WU', mac_address: '8c:4f:00:e4:8a:23', source: 'monitorie' },
   });
   assert.equal(resWU.status, 201);
   const wu = (await resWU.json()).device;
   assert.equal(wu.device_type, 'SM-WU');
-  assert.equal(wu.device_code, 'SMWU-001');
+  assert.equal(wu.device_code, 'SMWU-8C4F00E48A23');
+  assert.equal(wu.mac_address, '8C:4F:00:E4:8A:23');
+  assert.equal(wu.external_id, undefined);
 
   const resWA = await admin.request('/api/admin/devices', {
     method: 'POST',
-    data: { device_type: 'SM-WA', device_code: 'SMWA-002', external_id: 'mon_wa_2', source: 'monitorie' },
+    data: { device_type: 'SM-WA', mac_address: 'AA-BB-CC-DD-EE-01', source: 'monitorie' },
   });
   assert.equal(resWA.status, 201);
   const wa = (await resWA.json()).device;
   assert.equal(wa.device_type, 'SM-WA');
-  assert.equal(wa.device_code, 'SMWA-002');
+  assert.equal(wa.device_code, 'SMWA-AABBCCDDEE01');
 
   const resInvalidType = await admin.request('/api/admin/devices', {
     method: 'POST',
-    data: { device_type: 'OUTRO', device_code: 'DEV-999' },
+    data: { device_type: 'OUTRO', mac_address: 'AA:BB:CC:DD:EE:02' },
   });
   assert.equal(resInvalidType.status, 422);
 
   const resDupCode = await admin.request('/api/admin/devices', {
     method: 'POST',
-    data: { device_type: 'SM-WU', device_code: 'SMWU-001' },
+    data: { device_type: 'SM-WA', mac_address: '8C4F00E48A23' },
   });
   assert.equal(resDupCode.status, 409);
 
   const resDupExt = await admin.request('/api/admin/devices', {
     method: 'POST',
-    data: { device_type: 'SM-WA', device_code: 'SMWA-003', external_id: 'mon_wu_1', source: 'monitorie' },
+    data: { device_type: 'SM-WA', mac_address: '8C:4F:00:E4:8A' },
   });
-  assert.equal(resDupExt.status, 409);
+  assert.equal(resDupExt.status, 422);
 
+  const legacyId = await admin.request('/api/admin/devices', {
+    method: 'POST',
+    data: { device_type: 'SM-WU', device_code: 'inventado', mac_address: 'AA:BB:CC:DD:EE:03' },
+  });
+  assert.equal(legacyId.status, 422);
+
+  await configure();
+});
+
+test('migração aditiva preserva códigos, ativação e vínculo legados sem supor MAC', async () => {
+  const legacy = new Miniflare({ ...options(), d1Databases: { DB: 'migration-only' } });
+  try {
+    const legacyDb = await legacy.getD1Database('DB');
+    for (const file of (await readdir('cloudflare/migrations'))
+      .filter((f) => f.endsWith('.sql') && f < '0006')
+      .sort())
+      await legacyDb.batch(
+        unstable_splitSqlQuery(await readFile(`cloudflare/migrations/${file}`, 'utf8')).map((q) =>
+          legacyDb.prepare(q),
+        ),
+      );
+    const time = seconds();
+    await legacyDb
+      .prepare(
+        "INSERT INTO users(id,name,email,password_hash,created_at,updated_at) VALUES (1,'Legado','legado@example.test','hash',?,?)",
+      )
+      .bind(time, time)
+      .run();
+    await legacyDb
+      .prepare(
+        "INSERT INTO devices(id,device_code,source,external_id,created_at,updated_at) VALUES (1,'LEGACY-ONE','monitorie','11111111-2222-3333-4444-555555555555',?,?),(2,'LEGACY-TWO','local',NULL,?,?)",
+      )
+      .bind(time, time, time, time)
+      .run();
+    await legacyDb
+      .prepare(
+        'INSERT INTO activation_codes(device_id,code_hash,created_by_user_id,expires_at,created_at) VALUES (2,?,?,?,?)',
+      )
+      .bind(digest('legacy-code'), 1, time + 86400, time)
+      .run();
+    await legacyDb
+      .prepare(
+        "INSERT INTO reservoirs(user_id,device_id,name,linked_at,created_at,updated_at) VALUES (1,1,'Legado',?,?,?)",
+      )
+      .bind(time, time, time)
+      .run();
+    await legacyDb.batch(
+      unstable_splitSqlQuery(await readFile('cloudflare/migrations/0006_device_mac.sql', 'utf8')).map((q) =>
+        legacyDb.prepare(q),
+      ),
+    );
+    const records = (
+      await legacyDb
+        .prepare('SELECT id,device_code,external_id,mac_address,owner_user_id FROM devices ORDER BY id')
+        .all()
+    ).results;
+    assert.deepEqual(
+      records.map((r) => r.mac_address),
+      [null, null],
+    );
+    assert.deepEqual(
+      records.map((r) => r.device_code),
+      ['LEGACY-ONE', 'LEGACY-TWO'],
+    );
+    assert.equal(records[0].external_id, '11111111-2222-3333-4444-555555555555');
+    assert.equal(records[0].owner_user_id, 1);
+    assert.equal(
+      (await legacyDb.prepare('SELECT code_hash FROM activation_codes WHERE device_id=2').first()).code_hash,
+      digest('legacy-code'),
+    );
+    assert.equal(
+      (
+        await legacyDb
+          .prepare('SELECT COUNT(*) n FROM reservoirs WHERE device_id=1 AND unlinked_at IS NULL')
+          .first()
+      ).n,
+      1,
+    );
+    await assert.rejects(
+      legacyDb.prepare("UPDATE devices SET mac_address='invalid' WHERE id=2").run(),
+      /CHECK constraint/i,
+    );
+    await legacyDb.prepare("UPDATE devices SET mac_address='AA:BB:CC:DD:EE:20' WHERE id=2").run();
+    assert.equal(
+      (await legacyDb.prepare('SELECT device_code FROM devices WHERE id=2').first()).device_code,
+      'LEGACY-TWO',
+    );
+    assert.equal(
+      (await legacyDb.prepare('SELECT code_hash FROM activation_codes WHERE device_id=2').first()).code_hash,
+      digest('legacy-code'),
+    );
+  } finally {
+    await legacy.dispose();
+  }
+});
+
+test('pareamento por MAC e código; associação só por telemetria mac exata libera leitura', async () => {
+  const admin = await adminBrowser();
+  const created = await admin.request('/api/admin/devices', {
+    method: 'POST',
+    data: { device_type: 'SM-WU', mac_address: '02:11:22:33:44:55', source: 'monitorie' },
+  });
+  assert.equal(created.status, 201);
+  const deviceId = (await created.json()).device.id;
+  const code = (
+    await (
+      await admin.request(`/api/admin/devices/${deviceId}/generate-code`, { method: 'POST', data: {} })
+    ).json()
+  ).activation_code;
+  const client = browser();
+  await client.register('sem-id@example.test');
+  const wrongMac = await client.request('/api/devices/validate-pairing', {
+    method: 'POST', data: { pairing_code: code, mac_address: '02:11:22:33:44:56' },
+  });
+  assert.equal(wrongMac.status, 422);
+  const invalidMac = await client.request('/api/devices/validate-pairing', {
+    method: 'POST', data: { pairing_code: code, mac_address: '02:11:22:33:44' },
+  });
+  assert.equal(invalidMac.status, 422);
+  const validation = await (
+    await client.request('/api/devices/validate-pairing', {
+      method: 'POST', data: { pairing_code: code, mac_address: '021122334455' },
+    })
+  ).json();
+  assert.equal(validation.data.telemetry_linked, false);
+  const reservoir = await connect(client, code, 'Caixa principal', '02:11:22:33:44:55');
+  assert.equal(reservoir.device.telemetry_linked, false);
+  const empty = await client.request(`/api/device/snapshot?reservoir_id=${reservoir.id}`);
+  assert.equal(empty.status, 200);
+  const emptyPayload = await empty.json();
+  assert.equal(emptyPayload.data, null);
+  assert.equal(emptyPayload.device.telemetry_linked, false);
+  assert.deepEqual(emptyPayload.alerts, []);
+  assert.equal(
+    (await (await client.request(`/api/device/history?reservoir_id=${reservoir.id}`)).json()).count,
+    0,
+  );
+  assert.equal(monitorieRequests.length, 0);
+
+  const id = '11111111-2222-3333-4444-555555555555';
+  const jwt = `e30.${Buffer.from(JSON.stringify({ exp: seconds() + 3600 })).toString('base64url')}.sig`;
+  monitorieFixture = { id, jwt, mac: null, type: 'SM-WU' };
+  await configure({
+    MONITORIE_MODE: 'live',
+    MONITORIE_JWT: jwt,
+    MONITORIE_SMWU_MAPPING: JSON.stringify({
+      distancia: { key: 'd', unit: 'cm' },
+      nivel: { key: 'nivel', unit: '%' },
+      volume: { key: 'volume', unit: 'L' },
+      rssi_wifi: { key: 'rssi_wifi', unit: 'dBm' },
+    }),
+    MONITORIE_SMWA_MAPPING: JSON.stringify({
+      vazao: { key: 'vazao', unit: 'L/h' },
+      consumo_acumulado: { key: 'consumo', unit: 'L' },
+      rssi_wifi: { key: 'rssi_wifi', unit: 'dBm' },
+    }),
+  });
+  const noManual = await admin.request(`/api/admin/devices/${deviceId}/monitorie-associate`, {
+    method: 'POST', data: { external_id: id },
+  });
+  assert.equal(noManual.status, 404);
+  const first = await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, {
+    method: 'POST', data: {},
+  });
+  assert.equal((await first.json()).status, 'scanning');
+  await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
+  const noMac = await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, {
+    method: 'POST', data: {},
+  });
+  assert.equal((await noMac.json()).status, 'scanning');
+  const unlinked = await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, {
+    method: 'POST', data: {},
+  });
+  assert.equal((await unlinked.json()).status, 'unlinked');
+  assert.equal(
+    (await db.prepare('SELECT external_id FROM devices WHERE id=?').bind(deviceId).first()).external_id,
+    null,
+  );
+  monitorieFixture.mac = '02-11-22-33-44-55';
+  await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
+  await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, { method: 'POST', data: {} });
+  await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
+  await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, { method: 'POST', data: {} });
+  const associated = await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, {
+    method: 'POST', data: {},
+  });
+  assert.equal((await associated.json()).status, 'linked');
+  const second = await admin.request('/api/admin/devices', {
+    method: 'POST',
+    data: { device_type: 'SM-WA', mac_address: '02:11:22:33:44:66' },
+  });
+  const secondId = (await second.json()).device.id;
+  monitorieFixture.mac = '02:11:22:33:44:66';
+  monitorieFixture.type = 'SM-WA';
+  await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
+  await admin.request(`/api/admin/devices/${secondId}/monitorie-discover`, { method: 'POST', data: {} });
+  await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
+  await admin.request(`/api/admin/devices/${secondId}/monitorie-discover`, { method: 'POST', data: {} });
+  const alreadyUsed = await admin.request(`/api/admin/devices/${secondId}/monitorie-discover`, {
+    method: 'POST', data: {},
+  });
+  assert.equal(alreadyUsed.status, 409);
+  assert.equal((await db.prepare('SELECT external_id FROM devices WHERE id=?').bind(secondId).first()).external_id, null);
+  await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
+  const snapshot = await client.request(`/api/device/snapshot?reservoir_id=${reservoir.id}`);
+  assert.equal(snapshot.status, 200, JSON.stringify(await snapshot.clone().json()));
+  const payload = await snapshot.json();
+  assert.equal(payload.device.telemetry_linked, true);
+  assert.equal(payload.data.nivel, 50);
+  assert.equal(monitorieRequests.length, 7);
+  assert.ok(monitorieRequests[6].includes(id));
+  assert.ok(!monitorieRequests[6].includes('02:11:22:33:44:55'));
+
+  const waId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+  monitorieFixture.id = waId;
+  const waCode = (
+    await (
+      await admin.request(`/api/admin/devices/${secondId}/generate-code`, { method: 'POST', data: {} })
+    ).json()
+  ).activation_code;
+  const waReservoir = await connect(client, waCode, 'Hidrômetro', '02:11:22:33:44:66');
+  assert.equal(waReservoir.device.telemetry_linked, false);
+  await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
+  await admin.request(`/api/admin/devices/${secondId}/monitorie-discover`, { method: 'POST', data: {} });
+  await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
+  await admin.request(`/api/admin/devices/${secondId}/monitorie-discover`, { method: 'POST', data: {} });
+  const waAssociated = await admin.request(`/api/admin/devices/${secondId}/monitorie-discover`, { method: 'POST', data: {} });
+  assert.equal((await waAssociated.json()).status, 'linked');
+  await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
+  const waSnapshot = await client.request(`/api/device/snapshot?reservoir_id=${waReservoir.id}`);
+  assert.equal(waSnapshot.status, 200, JSON.stringify(await waSnapshot.clone().json()));
+  const waPayload = await waSnapshot.json();
+  assert.equal(waPayload.device.telemetry_linked, true);
+  assert.equal(waPayload.data.vazao, 12);
+  assert.equal(waPayload.data.consumo_acumulado, 345);
+  assert.ok(monitorieRequests.at(-1).includes(waId));
+  const correctedMac = await admin.request(`/api/admin/devices/${deviceId}/update`, {
+    method: 'POST', data: { mac_address: '02:11:22:33:44:77', confirm_linked_modification: true },
+  });
+  assert.equal(correctedMac.status, 200);
+  assert.equal((await db.prepare('SELECT external_id FROM devices WHERE id=?').bind(deviceId).first()).external_id, null);
+  assert.equal((await (await client.request(`/api/device/snapshot?reservoir_id=${reservoir.id}`)).json()).device.telemetry_linked, false);
+  monitorieFixture.mac = '02:11:22:33:44:77';
+  monitorieFixture.type = 'SM-WA';
+  await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
+  await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, { method: 'POST', data: {} });
+  await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
+  await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, { method: 'POST', data: {} });
+  const wrongModel = await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, {
+    method: 'POST', data: {},
+  });
+  assert.equal((await wrongModel.json()).status, 'unlinked');
+  assert.equal((await db.prepare('SELECT external_id FROM devices WHERE id=?').bind(deviceId).first()).external_id, null);
+  await configure();
+});
+
+test('primeiro titular vê último estado real; transferência oculta leitura anterior ao novo vínculo', async () => {
+  const jwt = `e30.${Buffer.from(JSON.stringify({ exp: seconds() + 3600 })).toString('base64url')}.sig`;
+  monitorieFixture = { id: 'external-1', jwt, readingTs: Date.now() - 3600000 };
+  await configure({
+    MONITORIE_MODE: 'live', MONITORIE_JWT: jwt,
+    MONITORIE_SMWU_MAPPING: JSON.stringify({
+      distancia: { key: 'd', unit: 'cm' }, nivel: { key: 'nivel', unit: '%' },
+      volume: { key: 'volume', unit: 'L' }, rssi_wifi: { key: 'rssi_wifi', unit: 'dBm' },
+    }),
+  });
+  const code = await provision(1, 'monitorie');
+  const first = browser();
+  await first.register('primeiro-titular@example.test');
+  const reservoir = await connect(first, code);
+  const initial = await first.request(`/api/device/snapshot?reservoir_id=${reservoir.id}`);
+  assert.equal(initial.status, 200);
+  assert.equal((await initial.json()).data.nivel, 50);
+
+  const admin = await adminBrowser();
+  const transfer = await admin.request('/api/admin/devices/1/transfer', { method: 'POST', data: {} });
+  assert.equal(transfer.status, 200);
+  const second = browser();
+  await second.register('novo-titular@example.test');
+  const next = await connect(second, (await transfer.json()).activation_code);
+  await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
+  const afterTransfer = await second.request(`/api/device/snapshot?reservoir_id=${next.id}`);
+  assert.equal(afterTransfer.status, 200);
+  assert.equal((await afterTransfer.json()).data, null);
   await configure();
 });
 
@@ -798,7 +1132,7 @@ test('código de ativação puro de uso único, armazenamento apenas de hash e r
 
   const resDev = await admin.request('/api/admin/devices', {
     method: 'POST',
-    data: { device_type: 'SM-WU', device_code: 'SMWU-CODE-TEST' },
+    data: { device_type: 'SM-WU', mac_address: 'AA:BB:CC:DD:EE:11' },
   });
   const devId = (await resDev.json()).device.id;
 
@@ -847,7 +1181,7 @@ test('ativação pelo cliente, isolamento completo na transferência e impedimen
 
   const resDev = await admin.request('/api/admin/devices', {
     method: 'POST',
-    data: { device_type: 'SM-WU', device_code: 'SMWU-FLOW-01', external_id: 'ext_flow_01', source: 'local' },
+    data: { device_type: 'SM-WU', mac_address: 'AA:BB:CC:DD:EE:12', source: 'local' },
   });
   const devId = (await resDev.json()).device.id;
 
@@ -861,7 +1195,7 @@ test('ativação pelo cliente, isolamento completo na transferência e impedimen
   await clientA.register('client-a@example.test', 'Cliente A');
   const pairA = await clientA.request('/api/devices/connect', {
     method: 'POST',
-    data: { pairing_code: codeA, reservoir_name: 'Reservatório Cliente A' },
+    data: { pairing_code: codeA, mac_address: 'AA:BB:CC:DD:EE:12', reservoir_name: 'Reservatório Cliente A' },
   });
   assert.equal(pairA.status, 201);
   const resIdA = (await pairA.json()).data.id;
@@ -879,13 +1213,13 @@ test('ativação pelo cliente, isolamento completo na transferência e impedimen
 
   const resSilent = await admin.request(`/api/admin/devices/${devId}/update`, {
     method: 'POST',
-    data: { external_id: 'ext_alterado_silenciosamente' },
+    data: { mac_address: 'AA:BB:CC:DD:EE:13' },
   });
   assert.equal(resSilent.status, 422);
 
   const resConfirmed = await admin.request(`/api/admin/devices/${devId}/update`, {
     method: 'POST',
-    data: { external_id: 'ext_alterado_confirmado', confirm_linked_modification: true },
+    data: { mac_address: 'AA:BB:CC:DD:EE:13', confirm_linked_modification: true },
   });
   assert.equal(resConfirmed.status, 200);
 
@@ -893,7 +1227,7 @@ test('ativação pelo cliente, isolamento completo na transferência e impedimen
   await clientB.register('client-b@example.test', 'Cliente B');
   const pairBAttempt = await clientB.request('/api/devices/connect', {
     method: 'POST',
-    data: { pairing_code: codeA, reservoir_name: 'Tentativa B' },
+    data: { pairing_code: codeA, mac_address: 'AA:BB:CC:DD:EE:13', reservoir_name: 'Tentativa B' },
   });
   assert.equal(pairBAttempt.status, 422);
 
@@ -906,7 +1240,7 @@ test('ativação pelo cliente, isolamento completo na transferência e impedimen
 
   const pairB = await clientB.request('/api/devices/connect', {
     method: 'POST',
-    data: { pairing_code: codeB, reservoir_name: 'Novo Reservatório Cliente B' },
+    data: { pairing_code: codeB, mac_address: 'AA:BB:CC:DD:EE:13', reservoir_name: 'Novo Reservatório Cliente B' },
   });
   assert.equal(pairB.status, 201);
   const resIdB = (await pairB.json()).data.id;
@@ -1185,13 +1519,13 @@ test('capacity authorization validation and atomic audit rollback', async () => 
 });
 test('creation uniqueness, active code uniqueness and immutable audit under concurrency', async () => {
   const admin = await adminBrowser();
-  const data = { device_type: 'SM-WU', device_code: 'CONCURRENT', source: 'local' };
+  const data = { device_type: 'SM-WU', mac_address: 'AA:BB:CC:DD:EE:31', source: 'local' };
   const results = await Promise.all([
     admin.request('/api/admin/devices', { method: 'POST', data }),
     admin.request('/api/admin/devices', { method: 'POST', data }),
   ]);
   assert.deepEqual(results.map((r) => r.status).sort(), [201, 409]);
-  const device = await db.prepare("SELECT id FROM devices WHERE device_code='CONCURRENT'").first();
+  const device = await db.prepare("SELECT id FROM devices WHERE mac_address='AA:BB:CC:DD:EE:31'").first();
   const codes = await Promise.all(
     Array.from({ length: 4 }, () =>
       admin.request(`/api/admin/devices/${device.id}/generate-code`, { method: 'POST', data: {} }),
@@ -1218,13 +1552,13 @@ test('device creation rolls back when the audit insertion fails', async () => {
     (
       await admin.request('/api/admin/devices', {
         method: 'POST',
-        data: { device_type: 'SM-WU', device_code: 'ROLLBACK', source: 'local' },
+        data: { device_type: 'SM-WU', mac_address: 'AA:BB:CC:DD:EE:32', source: 'local' },
       })
     ).status,
     503,
   );
   assert.equal(
-    (await db.prepare("SELECT COUNT(*) n FROM devices WHERE device_code='ROLLBACK'").first()).n,
+    (await db.prepare("SELECT COUNT(*) n FROM devices WHERE mac_address='AA:BB:CC:DD:EE:32'").first()).n,
     0,
   );
 });

@@ -1,11 +1,15 @@
 # Somente nomes/valores vazios. Não copie o .env legado.
-# npm run dev gera secrets locais aleatórios em .dev.vars se o arquivo não existir.
+# npm run dev guarda secrets locais aleatórios em .runtime/local/secrets.json.
 SESSION_SECRET=
 PASSWORD_PEPPER=
 APP_URL=
 BREVO_API_KEY=
 BREVO_SENDER_EMAIL=
 BREVO_SENDER_NAME=
+# Autenticação contínua no Worker. Preencha apenas no arquivo local ignorado pelo Git.
+MONITORIE_USERNAME=
+MONITORIE_PASSWORD=
+# Compatibilidade temporária com o token copiado manualmente, se não houver usuário/senha.
 MONITORIE_JWT=
 MONITORIE_SMWU_MAPPING=
 MONITORIE_SMWA_MAPPING=

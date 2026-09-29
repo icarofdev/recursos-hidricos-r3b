@@ -7,13 +7,16 @@ const dashboardState = {
   selectedMetric: 'nivel',
   currentPage: 1,
   pageSize: 7,
-  refreshMilliseconds: 60000,
+  refreshMilliseconds: 75000,
   refreshTimer: null,
   elapsedTimer: null,
   historyMeta: null,
   historyVisible: false,
   units: {},
   snapshotLastStarted: new Map(),
+  lastMonitorieRequestStarted: 0,
+  lastMonitorieRequestType: null,
+  historyRequestPending: false,
   historyError: false,
   latestError: false,
   statusError: false,
@@ -28,6 +31,7 @@ const dashboardState = {
   reservoirs: [],
   selectedReservoirId: null,
   pairingCode: null,
+  pairingMac: null,
 };
 
 const HISTORY_REFRESH_MILLISECONDS = 300000;
@@ -211,16 +215,18 @@ function getLevelTrend(history = getRangeHistory()) {
 }
 
 function getConsumptionSeries(history = getRangeHistory()) {
-  if (dashboardState.historyMeta?.aggregation !== 'none' || dashboardState.units.volume !== 'L')
+  const isSMWA = getSelectedReservoir()?.device?.type === 'SM-WA';
+  const field = isSMWA ? 'consumo_acumulado' : 'volume';
+  if (dashboardState.historyMeta?.aggregation !== 'none' || dashboardState.units[field] !== 'L')
     return { available: false, points: [], total: 0, intervals: 0 };
-  const ordered = getChronologicalHistory(history).filter((item) => toFiniteNumber(item.volume) !== null);
+  const ordered = getChronologicalHistory(history).filter((item) => toFiniteNumber(item[field]) !== null);
   if (ordered.length < 2) return { available: false, points: [], total: 0, intervals: 0 };
 
   const points = [];
   for (let index = 1; index < ordered.length; index += 1) {
-    const previousVolume = toFiniteNumber(ordered[index - 1].volume);
-    const currentVolume = toFiniteNumber(ordered[index].volume);
-    const reduction = previousVolume - currentVolume;
+    const previous = toFiniteNumber(ordered[index - 1][field]);
+    const current = toFiniteNumber(ordered[index][field]);
+    const reduction = isSMWA ? current - previous : previous - current;
 
     if (reduction > 0) {
       points.push({

@@ -117,7 +117,7 @@
 
       <div class="sidebar-footer">
         <span class="pulse-dot" aria-hidden="true"></span
-        ><span><strong>Coleta automática</strong><small>Telemetria SM-WU</small></span>
+        ><span><strong>Coleta automática</strong><small>Telemetria SM-WU e SM-WA</small></span>
       </div>
     </aside>
 
@@ -194,7 +194,7 @@
           </div>
           <div class="page-intro-actions">
             <label class="reservoir-picker" for="reservoir-select"
-              ><span>Reservatório</span
+              ><span id="reservoir-select-label">Reservatório</span
               ><select id="reservoir-select" aria-label="Selecionar reservatório">
                 <option>Carregando…</option>
               </select></label
@@ -204,7 +204,7 @@
             </button>
             <div class="live-chip">
               <span class="pulse-dot" aria-hidden="true"></span
-              ><span>Atualização automática <strong id="refresh-rate-label">a cada 60 segundos</strong></span>
+              ><span>Atualização automática <strong id="refresh-rate-label">a cada 75 segundos</strong></span>
             </div>
           </div>
         </section>
@@ -302,7 +302,7 @@
               <span class="status-badge is-waiting" id="telemetry-status">Aguardando</span>
             </div>
             <div class="reservoir-content">
-              <div class="tank-area">
+              <div class="tank-area" id="tank-area">
                 <div
                   class="tank-visual"
                   role="img"
@@ -319,21 +319,21 @@
                 <span class="tank-caption">Percentual de enchimento</span>
               </div>
               <div class="reservoir-reading">
-                <p class="reading-label">Nível atual</p>
+                <p class="reading-label" id="primary-reading-label">Nível atual</p>
                 <div class="primary-reading skeleton-text" id="consumption-reading">—</div>
                 <p id="telemetry-classification">Aguardando telemetria</p>
-                <div class="level-track" aria-hidden="true"><span id="level-track-fill"></span></div>
+                <div class="level-track" id="level-track" aria-hidden="true"><span id="level-track-fill"></span></div>
                 <dl class="reservoir-details">
                   <div>
-                    <dt>Volume atual</dt>
+                    <dt id="flow-reading-label">Volume atual</dt>
                     <dd id="flow-reading">—</dd>
                   </div>
-                  <div>
+                  <div id="capacity-reading-row">
                     <dt>Capacidade total</dt>
                     <dd id="capacity-reading">Não informada</dd>
                   </div>
                   <div>
-                    <dt>Distância do sensor</dt>
+                    <dt id="wifi-reading-label">Distância do sensor</dt>
                     <dd id="wifi-reading">—</dd>
                   </div>
                   <div>
@@ -362,7 +362,7 @@
                   <span class="meta-icon"
                     ><svg aria-hidden="true"><use href="#icon-signal"></use></svg></span
                   ><span
-                    ><small>Distância medida</small><strong id="flow-metric">—</strong
+                    ><small id="flow-metric-label">Distância medida</small><strong id="flow-metric">—</strong
                     ><em id="flow-context">Aguardando leitura</em></span
                   >
                 </div>
@@ -375,7 +375,7 @@
               <div>
                 <p class="eyebrow">Série temporal</p>
                 <h2 id="chart-title">Comportamento do reservatório</h2>
-                <p class="section-description">Acompanhe as variações registradas pelo SM-WU.</p>
+                <p class="section-description" id="chart-description">Acompanhe as variações registradas pelo SM-WU.</p>
               </div>
               <div class="range-filters" role="group" aria-label="Período do gráfico">
                 <button class="range-filter is-active" type="button" data-hours="24" aria-pressed="true">
@@ -390,9 +390,9 @@
             <div class="chart-subtoolbar">
               <div class="metric-tabs" role="group" aria-label="Métrica exibida no gráfico">
                 <button class="metric-tab is-active" type="button" data-metric="nivel" aria-pressed="true">
-                  Nível</button
+                  <span id="primary-chart-tab-label">Nível</span></button
                 ><button class="metric-tab" type="button" data-metric="consumo" aria-pressed="false">
-                  Consumo
+                  <span id="consumption-chart-tab-label">Consumo</span>
                 </button>
               </div>
               <span class="chart-legend"
@@ -439,7 +439,7 @@
                   >
                 </div>
               </div>
-              <p class="calculation-note">
+              <p class="calculation-note" id="calculation-note">
                 Consumo estimado localmente pela soma das reduções entre leituras consecutivas de volume.
               </p>
             </article>
@@ -530,15 +530,15 @@
                     <dd id="detail-last-reading">—</dd>
                   </div>
                   <div>
-                    <dt>Nível</dt>
+                    <dt id="detail-ppl-label">Nível</dt>
                     <dd id="detail-ppl">—</dd>
                   </div>
                   <div>
-                    <dt>Distância</dt>
+                    <dt id="detail-vazao-label">Distância</dt>
                     <dd id="detail-vazao">—</dd>
                   </div>
                   <div>
-                    <dt>Volume</dt>
+                    <dt id="detail-rssi-label">Volume</dt>
                     <dd id="detail-rssi">—</dd>
                   </div>
                   <div>
@@ -622,7 +622,7 @@
             <label class="select-field" for="refresh-interval"
               ><span>Intervalo de atualização</span
               ><select id="refresh-interval">
-                <option value="60000">A cada 1 minuto</option>
+                <option value="75000">A cada 75 segundos</option>
                 <option value="300000">A cada 5 minutos</option>
               </select></label
             >
@@ -689,8 +689,9 @@
         <p class="eyebrow">Configuração segura</p>
         <h2 id="pairing-title">Conectar dispositivo</h2>
         <div class="pairing-step" id="pairing-step-code">
-          <p>Digite o código de ativação fornecido pelo instalador ou administrador do seu Hidra R3B.</p>
+          <p>Informe o MAC do aparelho e o código de ativação fornecido pelo instalador. Para aparelhos antigos sem MAC cadastrado, use apenas o código.</p>
           <form id="pairing-code-form">
+            <label class="form-field"><span>MAC address do equipamento</span><input id="pairing-mac" name="mac_address" type="text" maxlength="17" autocomplete="off" spellcheck="false" placeholder="AA:BB:CC:DD:EE:FF" /></label>
             <label class="form-field"
               ><span>Código de ativação fornecido pelo instalador</span
               ><input
@@ -717,7 +718,7 @@
           </div>
           <form id="pairing-confirm-form">
             <label class="form-field"
-              ><span>Nome do reservatório</span
+              ><span id="pairing-name-label">Nome do reservatório</span
               ><input
                 id="pairing-reservoir-name"
                 name="reservoir_name"

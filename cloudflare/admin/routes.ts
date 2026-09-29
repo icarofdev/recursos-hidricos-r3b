@@ -8,6 +8,7 @@ import { deviceMutation } from './mutations';
 interface AdminDeviceRow {
   id: number;
   device_code: string;
+  mac_address: string | null;
   device_type: DeviceType;
   source: string;
   external_id: string | null;
@@ -32,7 +33,7 @@ export async function adminRoute(c: Context, path: string): Promise<Response> {
 
   if (path === '/api/admin/devices' && c.request.method === 'GET') {
     const sql = `
-   SELECT d.id, d.device_code, d.device_type, d.source, d.external_id,
+   SELECT d.id, d.device_code, d.mac_address, d.device_type, d.source, d.external_id,
           d.owner_user_id, u.name as owner_name, u.email as owner_email,
           r.id as reservoir_id, r.name as reservoir_name, r.linked_at,
           d.reported_status, d.last_seen, d.created_at, d.updated_at,
@@ -52,6 +53,7 @@ export async function adminRoute(c: Context, path: string): Promise<Response> {
       data: results.map((row) => ({
         id: row.id,
         device_code: row.device_code,
+        mac_address: row.mac_address,
         device_type: row.device_type,
         source: row.source,
         external_id: row.external_id,

@@ -18,6 +18,12 @@ export interface RequestGate {
   reserve(): Promise<void>;
   defer(seconds: number): Promise<void>;
 }
+export type AccessTokenSource =
+  | (() => Promise<string>)
+  | {
+      get(): Promise<string>;
+      rejected?(token: string): Promise<void>;
+    };
 export interface MonitorieDevice {
   id: string;
   name: string;
@@ -79,7 +85,7 @@ export function monitorieJwt(env: Pick<Env, 'MONITORIE_MODE' | 'MONITORIE_JWT'>,
 }
 
 function deviceId(value: string): string {
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) throw badInput();
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(value)) throw badInput();
   return value;
 }
 function keysParam(keys: readonly string[]): string {
@@ -133,7 +139,7 @@ async function requestJson(
       throw new HttpError(
         503,
         'MONITORIE_TOKEN_REJECTED',
-        'O JWT da integração MonitorIE foi rejeitado. Atualize o secret MONITORIE_JWT.',
+        'A MonitorIE rejeitou a autenticação. Uma nova tentativa será feita no próximo ciclo.',
       );
     if (response.status === 403)
       throw new HttpError(
@@ -190,18 +196,23 @@ async function requestJson(
 /** Lê somente recursos documentados no Swagger. Não contém endpoint de escrita nem renovação automática. */
 export class MonitorieReadClient {
   #accessToken: () => Promise<string>;
+  #rejected: ((token: string) => Promise<void>) | undefined;
   #gate: RequestGate;
   #transport: Transport;
   #timeoutMilliseconds: number;
   constructor(
-    accessToken: () => Promise<string>,
+    accessToken: AccessTokenSource,
     gate: RequestGate,
     transport: Transport = (request) => fetch(request),
     timeoutMilliseconds = DEFAULT_TIMEOUT_MS,
   ) {
     if (!Number.isInteger(timeoutMilliseconds) || timeoutMilliseconds < 1 || timeoutMilliseconds > 30000)
       throw badInput();
-    this.#accessToken = accessToken;
+    this.#accessToken = typeof accessToken === 'function' ? accessToken : () => accessToken.get();
+    this.#rejected =
+      typeof accessToken === 'function' || !accessToken.rejected
+        ? undefined
+        : (token) => accessToken.rejected!(token);
     this.#gate = gate;
     this.#transport = transport;
     this.#timeoutMilliseconds = timeoutMilliseconds;
@@ -209,13 +220,23 @@ export class MonitorieReadClient {
   async #get(path: string): Promise<unknown> {
     const token = await this.#accessToken();
     if (!token || /\s/.test(token)) throw notConfigured();
-    return requestJson(
-      path,
-      { method: 'GET', headers: { 'X-Authorization': `Bearer ${token}`, Accept: 'application/json' } },
-      this.#gate,
-      this.#transport,
-      this.#timeoutMilliseconds,
-    );
+    try {
+      return await requestJson(
+        path,
+        { method: 'GET', headers: { 'X-Authorization': `Bearer ${token}`, Accept: 'application/json' } },
+        this.#gate,
+        this.#transport,
+        this.#timeoutMilliseconds,
+      );
+    } catch (error) {
+      if (error instanceof HttpError && error.code === 'MONITORIE_TOKEN_REJECTED')
+        try {
+          await this.#rejected?.(token);
+        } catch {
+          /* Keep the provider error generic. */
+        }
+      throw error;
+    }
   }
   async devices(page = 0, pageSize = 100): Promise<MonitorieDevicePage> {
     if (!Number.isInteger(page) || page < 0 || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100)
@@ -274,6 +295,25 @@ export class MonitorieReadClient {
     )
       throw invalid();
     return data;
+  }
+  async attributes(externalId: string): Promise<{ key: string; value: unknown }[]> {
+    const data = await this.#get(`/api/plugins/telemetry/DEVICE/${deviceId(externalId)}/values/attributes`);
+    if (
+      !Array.isArray(data) ||
+      data.length > 1000 ||
+      data.some(
+        (entry) =>
+          !object(entry) ||
+          typeof entry.key !== 'string' ||
+          entry.key.length > 255 ||
+          !Object.hasOwn(entry, 'value'),
+      )
+    )
+      throw invalid();
+    return data.map((entry) => ({
+      key: (entry as { key: string }).key,
+      value: (entry as { value: unknown }).value,
+    }));
   }
   async latest(externalId: string, keys: readonly string[]): Promise<TelemetrySeries> {
     const path = `/api/plugins/telemetry/DEVICE/${deviceId(externalId)}/values/timeseries`;
