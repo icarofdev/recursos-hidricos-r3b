@@ -117,9 +117,13 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
   if (path === '/api/devices/validate-pairing' || path === '/api/devices/connect') {
     await rateLimit(c, 'pairing', clientIP(c), isLocal(c) ? 100 : 10, 600);
     const connect = path.endsWith('/connect');
-    const data = await body(c, connect ? ['pairing_code', 'mac_address', 'reservoir_name'] : ['pairing_code', 'mac_address']);
+    const data = await body(
+      c,
+      connect ? ['pairing_code', 'mac_address', 'reservoir_name'] : ['pairing_code', 'mac_address'],
+    );
     const code = string(data, 'pairing_code', 96).trim().toUpperCase();
-    const mac = data.mac_address === undefined || data.mac_address === '' ? null : normalizeMac(data.mac_address);
+    const mac =
+      data.mac_address === undefined || data.mac_address === '' ? null : normalizeMac(data.mac_address);
     const hash = await sha256(code);
     if (!connect) {
       const device = await c.env.DB.prepare(
@@ -178,5 +182,9 @@ function reservoirName(name: string): string {
   return normalized;
 }
 function pairingError() {
-  return new HttpError(422, 'INVALID_PAIRING_CODE', 'MAC ou código de ativação inválido, expirado ou já utilizado.');
+  return new HttpError(
+    422,
+    'INVALID_PAIRING_CODE',
+    'MAC ou código de ativação inválido, expirado ou já utilizado.',
+  );
 }

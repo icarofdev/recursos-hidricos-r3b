@@ -63,7 +63,9 @@ export async function remoteSnapshot(c: Context, row: ReservoirRow): Promise<Sna
         // medição anterior ao novo vínculo permanece privada.
         const earlierLink = await c.env.DB.prepare(
           'SELECT 1 FROM reservoirs WHERE device_id=? AND id<>? LIMIT 1',
-        ).bind(row.device_id, row.id).first();
+        )
+          .bind(row.device_id, row.id)
+          .first();
         if (earlierLink) result.data = null;
       }
     }

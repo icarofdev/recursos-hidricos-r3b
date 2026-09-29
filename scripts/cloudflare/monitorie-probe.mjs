@@ -52,12 +52,23 @@ if (!['devices', 'structure', 'attributes', 'keys', 'latest', 'history'].include
     let result;
     if (command === 'structure') {
       const page = positiveInteger('page', 0, 100000);
-      const query = new URLSearchParams({ page: String(page), pageSize: '100', sortProperty: 'name', sortOrder: 'ASC' });
+      const query = new URLSearchParams({
+        page: String(page),
+        pageSize: '100',
+        sortProperty: 'name',
+        sortOrder: 'ASC',
+      });
       const response = await fetch(`https://monitorie.com.br/api/user/devices?${query}`, {
-        method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(10000),
+        method: 'GET',
+        redirect: 'manual',
+        signal: AbortSignal.timeout(10000),
         headers: { 'X-Authorization': `Bearer ${jwt}`, Accept: 'application/json' },
       });
-      if (!response.ok || response.status >= 300 || !response.headers.get('Content-Type')?.includes('application/json'))
+      if (
+        !response.ok ||
+        response.status >= 300 ||
+        !response.headers.get('Content-Type')?.includes('application/json')
+      )
         throw new Error('Resposta da lista indisponível ou inválida.');
       const raw = await response.json();
       if (!Array.isArray(raw?.data) || raw.data.length > 100) throw new Error('Lista inválida.');
@@ -70,8 +81,10 @@ if (!['devices', 'structure', 'attributes', 'keys', 'latest', 'history'].include
       result = raw.data.map((device) => ({
         id: device?.id?.id ?? null,
         fields: Object.keys(device),
-        additional_info_fields: device?.additionalInfo && typeof device.additionalInfo === 'object'
-          ? Object.keys(device.additionalInfo) : [],
+        additional_info_fields:
+          device?.additionalInfo && typeof device.additionalInfo === 'object'
+            ? Object.keys(device.additionalInfo)
+            : [],
         mac_value_paths: macPaths(device),
       }));
     } else if (command === 'devices') {
@@ -80,12 +93,26 @@ if (!['devices', 'structure', 'attributes', 'keys', 'latest', 'history'].include
       const deviceId = required('device-id');
       if (command === 'attributes') {
         const attributes = await client.attributes(deviceId);
-        result = { keys: attributes.map(({ key }) => key), mac_attributes: attributes
-          .filter(({ key }) => ['mac', 'macaddress', 'wifimac', 'wifimacaddress'].includes(key.toLowerCase().replace(/[^a-z0-9]/g, '')))
-          .map(({ key, value }) => ({ key, value: typeof value === 'string' && /^(?:(?:[0-9a-f]{2}:){5}[0-9a-f]{2}|(?:[0-9a-f]{2}-){5}[0-9a-f]{2}|[0-9a-f]{12})$/i.test(value)
-            ? value.toUpperCase() : '[formato não reconhecido]' })) };
-      }
-      else if (command === 'keys') result = await client.keys(deviceId);
+        result = {
+          keys: attributes.map(({ key }) => key),
+          mac_attributes: attributes
+            .filter(({ key }) =>
+              ['mac', 'macaddress', 'wifimac', 'wifimacaddress'].includes(
+                key.toLowerCase().replace(/[^a-z0-9]/g, ''),
+              ),
+            )
+            .map(({ key, value }) => ({
+              key,
+              value:
+                typeof value === 'string' &&
+                /^(?:(?:[0-9a-f]{2}:){5}[0-9a-f]{2}|(?:[0-9a-f]{2}-){5}[0-9a-f]{2}|[0-9a-f]{12})$/i.test(
+                  value,
+                )
+                  ? value.toUpperCase()
+                  : '[formato não reconhecido]',
+            })),
+        };
+      } else if (command === 'keys') result = await client.keys(deviceId);
       else {
         const keys = required('keys')
           .split(',')

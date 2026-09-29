@@ -315,13 +315,18 @@ function renderDevicePresentation() {
   getElement('capacity-reading-row').hidden = isSMWA;
   getElement('capacity-form').hidden = isSMWA;
   getElement('reservoir-select-label').textContent = isSMWA ? 'Equipamento' : 'Reservatório';
-  getElement('reservoir-select').setAttribute('aria-label', isSMWA ? 'Selecionar equipamento' : 'Selecionar reservatório');
+  getElement('reservoir-select').setAttribute(
+    'aria-label',
+    isSMWA ? 'Selecionar equipamento' : 'Selecionar reservatório',
+  );
   getElement('rename-reservoir').textContent = isSMWA ? 'Renomear equipamento' : 'Renomear reservatório';
   getElement('primary-reading-label').textContent = isSMWA ? 'Vazão atual' : 'Nível atual';
   getElement('flow-reading-label').textContent = isSMWA ? 'Consumo acumulado' : 'Volume atual';
   getElement('wifi-reading-label').textContent = isSMWA ? 'Volume reportado' : 'Distância do sensor';
   getElement('flow-metric-label').textContent = isSMWA ? 'Vazão medida' : 'Distância medida';
-  getElement('chart-title').textContent = isSMWA ? 'Histórico do hidrômetro' : 'Comportamento do reservatório';
+  getElement('chart-title').textContent = isSMWA
+    ? 'Histórico do hidrômetro'
+    : 'Comportamento do reservatório';
   getElement('chart-description').textContent = isSMWA
     ? 'Acompanhe as leituras registradas pelo SM-WA.'
     : 'Acompanhe as variações registradas pelo SM-WU.';
@@ -329,7 +334,9 @@ function renderDevicePresentation() {
   getElement('consumption-chart-tab-label').textContent = isSMWA ? 'No período' : 'Consumo';
   getElement('history-chart').setAttribute(
     'aria-label',
-    isSMWA ? 'Gráfico das leituras do SM-WA ao longo do tempo' : 'Gráfico das leituras do SM-WU ao longo do tempo',
+    isSMWA
+      ? 'Gráfico das leituras do SM-WA ao longo do tempo'
+      : 'Gráfico das leituras do SM-WU ao longo do tempo',
   );
   getElement('calculation-note').textContent = isSMWA
     ? 'Consumo no período calculado pela diferença positiva entre leituras consecutivas do contador acumulado.'
@@ -1302,7 +1309,9 @@ function bindPairing() {
             : `Offline · última comunicação ${formatElapsed(payload.data.last_seen)}`;
       const isSMWA = payload.data.device_type === 'SM-WA';
       getElement('pairing-name-label').textContent = isSMWA ? 'Nome do equipamento' : 'Nome do reservatório';
-      getElement('pairing-reservoir-name').placeholder = isSMWA ? 'Ex.: Hidrômetro principal' : 'Ex.: Reservatório principal';
+      getElement('pairing-reservoir-name').placeholder = isSMWA
+        ? 'Ex.: Hidrômetro principal'
+        : 'Ex.: Reservatório principal';
       getElement('pairing-step-code').hidden = true;
       getElement('pairing-step-confirm').hidden = false;
       getElement('pairing-reservoir-name').focus();

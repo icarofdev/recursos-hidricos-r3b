@@ -322,7 +322,9 @@
                 <p class="reading-label" id="primary-reading-label">Nível atual</p>
                 <div class="primary-reading skeleton-text" id="consumption-reading">—</div>
                 <p id="telemetry-classification">Aguardando telemetria</p>
-                <div class="level-track" id="level-track" aria-hidden="true"><span id="level-track-fill"></span></div>
+                <div class="level-track" id="level-track" aria-hidden="true">
+                  <span id="level-track-fill"></span>
+                </div>
                 <dl class="reservoir-details">
                   <div>
                     <dt id="flow-reading-label">Volume atual</dt>
@@ -375,7 +377,9 @@
               <div>
                 <p class="eyebrow">Série temporal</p>
                 <h2 id="chart-title">Comportamento do reservatório</h2>
-                <p class="section-description" id="chart-description">Acompanhe as variações registradas pelo SM-WU.</p>
+                <p class="section-description" id="chart-description">
+                  Acompanhe as variações registradas pelo SM-WU.
+                </p>
               </div>
               <div class="range-filters" role="group" aria-label="Período do gráfico">
                 <button class="range-filter is-active" type="button" data-hours="24" aria-pressed="true">
@@ -689,9 +693,22 @@
         <p class="eyebrow">Configuração segura</p>
         <h2 id="pairing-title">Conectar dispositivo</h2>
         <div class="pairing-step" id="pairing-step-code">
-          <p>Informe o MAC do aparelho e o código de ativação fornecido pelo instalador. Para aparelhos antigos sem MAC cadastrado, use apenas o código.</p>
+          <p>
+            Informe o MAC do aparelho e o código de ativação fornecido pelo instalador. Para aparelhos antigos
+            sem MAC cadastrado, use apenas o código.
+          </p>
           <form id="pairing-code-form">
-            <label class="form-field"><span>MAC address do equipamento</span><input id="pairing-mac" name="mac_address" type="text" maxlength="17" autocomplete="off" spellcheck="false" placeholder="AA:BB:CC:DD:EE:FF" /></label>
+            <label class="form-field"
+              ><span>MAC address do equipamento</span
+              ><input
+                id="pairing-mac"
+                name="mac_address"
+                type="text"
+                maxlength="17"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="AA:BB:CC:DD:EE:FF"
+            /></label>
             <label class="form-field"
               ><span>Código de ativação fornecido pelo instalador</span
               ><input

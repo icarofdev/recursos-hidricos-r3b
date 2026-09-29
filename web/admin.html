@@ -178,10 +178,19 @@
 
         <section class="surface admin-card">
           <h2 class="card-title">Localizar telemetria pelo MAC</h2>
-          <p class="section-description">Selecione um equipamento sem telemetria vinculada e avance a consulta. Cada etapa lê a lista ou a chave de telemetria “mac” de um dispositivo na MonitorIE. A associação ocorre somente após verificar a lista inteira e encontrar o MAC exato uma única vez no mesmo modelo.</p>
+          <p class="section-description">
+            Selecione um equipamento sem telemetria vinculada e avance a consulta. Cada etapa lê a lista ou a
+            chave de telemetria “mac” de um dispositivo na MonitorIE. A associação ocorre somente após
+            verificar a lista inteira e encontrar o MAC exato uma única vez no mesmo modelo.
+          </p>
           <form id="associate-monitorie-form" class="admin-form-grid">
-            <label class="form-field"><span>Equipamento cadastrado</span><select id="associate-device" required></select></label>
-            <div class="form-actions-full"><button type="submit" class="primary-button">Consultar próxima etapa</button></div>
+            <label class="form-field"
+              ><span>Equipamento cadastrado</span
+              ><select id="associate-device" required></select
+            ></label>
+            <div class="form-actions-full">
+              <button type="submit" class="primary-button">Consultar próxima etapa</button>
+            </div>
           </form>
           <p class="form-feedback" id="associate-feedback" role="status"></p>
         </section>

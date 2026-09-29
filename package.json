@@ -17,6 +17,7 @@
     "dev:seed": "node scripts/cloudflare/local-db.mjs seed",
     "admin": "node scripts/cloudflare/admin.mjs",
     "monitorie:probe": "node scripts/cloudflare/monitorie-probe.mjs",
+    "monitorie:auth-live": "node scripts/cloudflare/monitorie-auth-live.mjs",
     "monitorie:store-jwt": "node scripts/cloudflare/store-monitorie-jwt.mjs",
     "monitorie:store-jwt-browser": "node scripts/cloudflare/store-monitorie-jwt.mjs --server",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.frontend.json",

@@ -120,7 +120,8 @@ function initializeCharts() {
         : `Nível: ${formatNumber(context.parsed.y, 2)}%`;
     },
     afterLabel(context) {
-      if (dashboardState.selectedMetric !== 'nivel' || getSelectedReservoir()?.device?.type === 'SM-WA') return '';
+      if (dashboardState.selectedMetric !== 'nivel' || getSelectedReservoir()?.device?.type === 'SM-WA')
+        return '';
       const row = dashboardState.mainChartRows[context.dataIndex];
       const volume = toFiniteNumber(row?.volume);
       return volume === null ? 'Volume: não informado' : `Volume: ${formatNumber(volume, 2)} L`;
@@ -273,7 +274,8 @@ function renderChart() {
         'Nenhuma leitura no período',
         'Ainda não há valores válidos do contador acumulado para a faixa selecionada.',
       );
-      getElement('chart-summary').textContent = 'Dados insuficientes para analisar o consumo acumulado neste período.';
+      getElement('chart-summary').textContent =
+        'Dados insuficientes para analisar o consumo acumulado neste período.';
       return;
     }
     const values = rows.map((item) => toFiniteNumber(item.consumo_acumulado));

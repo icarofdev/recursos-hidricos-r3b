@@ -75,9 +75,7 @@ async function loadDevices() {
       select.replaceChildren();
       for (const dev of res.data || []) {
         if (dev.source === 'monitorie' && dev.mac_address) {
-          select.add(
-            new Option(`${dev.device_type} · ${dev.mac_address}`, String(dev.id)),
-          );
+          select.add(new Option(`${dev.device_type} · ${dev.mac_address}`, String(dev.id)));
         }
       }
       if ([...select.options].some((option) => option.value === previous)) select.value = previous;
@@ -316,13 +314,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     const deviceId = Number(document.getElementById('associate-device').value);
     try {
       const result = await request(`/api/admin/devices/${deviceId}/monitorie-discover`, { method: 'POST' });
-      associationFeedback.textContent = result.status === 'linked'
-        ? 'Telemetria vinculada: MAC exato confirmado em um único dispositivo acessível.'
-        : result.status === 'scanning'
-          ? `Consulta em andamento (${result.checked} dispositivos verificados). Aguarde 70 segundos e consulte a próxima etapa.`
-          : result.reason || 'Telemetria não vinculada.';
+      associationFeedback.textContent =
+        result.status === 'linked'
+          ? 'Telemetria vinculada: MAC exato confirmado em um único dispositivo acessível.'
+          : result.status === 'scanning'
+            ? `Consulta em andamento (${result.checked} dispositivos verificados). Aguarde 70 segundos e consulte a próxima etapa.`
+            : result.reason || 'Telemetria não vinculada.';
       associationFeedback.dataset.tone = result.status === 'linked' ? 'success' : 'info';
-      if (result.status === 'linked') { await loadDevices(); await loadAudit(); }
+      if (result.status === 'linked') {
+        await loadDevices();
+        await loadAudit();
+      }
     } catch (error) {
       associationFeedback.textContent = `Erro: ${error.message}`;
       associationFeedback.dataset.tone = 'error';

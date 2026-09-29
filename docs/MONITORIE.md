@@ -133,6 +133,8 @@ npm run dev:monitorie
 
 Esse modo é opt-in. O `npm run dev` comum continua usando mock local e bloqueia rede externa. O frontend local permanece em `http://127.0.0.1:8788`, chama o Worker em `http://127.0.0.1:8787` e mantém os estados já existentes de carregamento, ausência de dados e erro.
 
+Para verificar o endpoint real de renovação sem registrar tokens, execute `npm run monitorie:auth-live`. O diagnóstico usa D1 efêmero, faz login e uma leitura, força a renovação somente nesse cache de teste, espera o gate de 70 segundos e faz outra leitura. A saída contém apenas caminhos/status de autenticação, intervalo entre consultas e telemetria do dispositivo escolhido; um segundo login indica fallback em vez de refresh bem-sucedido.
+
 O D1 possui `telemetry_cache`, `settings` e, após a migration aditiva `0007_monitorie_auth_cache.sql`, `monitorie_auth_cache`. O primeiro guarda leituras temporárias, o segundo preserva o gate global de 70 segundos e o terceiro guarda apenas o par de tokens cifrado e o lease de renovação. Nenhuma leitura da Monitor IE é copiada para as tabelas de ingestão local ou para MySQL legado.
 
 ## Cloudflare Worker

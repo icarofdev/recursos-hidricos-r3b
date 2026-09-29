@@ -68,20 +68,31 @@ function options(overrides = {}) {
           );
         }
         if (uri.pathname.endsWith('/values/attributes')) {
-          return new MFResponse(JSON.stringify(monitorieFixture.attributes ?? []),
-            { headers: { 'Content-Type': 'application/json' } });
+          return new MFResponse(JSON.stringify(monitorieFixture.attributes ?? []), {
+            headers: { 'Content-Type': 'application/json' },
+          });
         }
         if (uri.pathname.endsWith('/values/timeseries')) {
           const ts = monitorieFixture.readingTs ?? Date.now();
           const data = Object.fromEntries(
             (uri.searchParams.get('keys') || '').split(',').map((key) => [
               key,
-              key === 'mac' && !monitorieFixture.mac ? [] : [
-                {
-                  ts,
-                  value: { mac: monitorieFixture.mac, d: 100, nivel: 50, volume: 500, rssi_wifi: -60, vazao: 12, consumo: 345 }[key],
-                },
-              ],
+              key === 'mac' && !monitorieFixture.mac
+                ? []
+                : [
+                    {
+                      ts,
+                      value: {
+                        mac: monitorieFixture.mac,
+                        d: 100,
+                        nivel: 50,
+                        volume: 500,
+                        rssi_wifi: -60,
+                        vazao: 12,
+                        consumo: 345,
+                      }[key],
+                    },
+                  ],
             ]),
           );
           return new MFResponse(JSON.stringify(data), { headers: { 'Content-Type': 'application/json' } });
@@ -949,16 +960,19 @@ test('pareamento por MAC e código; associação só por telemetria mac exata li
   const client = browser();
   await client.register('sem-id@example.test');
   const wrongMac = await client.request('/api/devices/validate-pairing', {
-    method: 'POST', data: { pairing_code: code, mac_address: '02:11:22:33:44:56' },
+    method: 'POST',
+    data: { pairing_code: code, mac_address: '02:11:22:33:44:56' },
   });
   assert.equal(wrongMac.status, 422);
   const invalidMac = await client.request('/api/devices/validate-pairing', {
-    method: 'POST', data: { pairing_code: code, mac_address: '02:11:22:33:44' },
+    method: 'POST',
+    data: { pairing_code: code, mac_address: '02:11:22:33:44' },
   });
   assert.equal(invalidMac.status, 422);
   const validation = await (
     await client.request('/api/devices/validate-pairing', {
-      method: 'POST', data: { pairing_code: code, mac_address: '021122334455' },
+      method: 'POST',
+      data: { pairing_code: code, mac_address: '021122334455' },
     })
   ).json();
   assert.equal(validation.data.telemetry_linked, false);
@@ -995,20 +1009,24 @@ test('pareamento por MAC e código; associação só por telemetria mac exata li
     }),
   });
   const noManual = await admin.request(`/api/admin/devices/${deviceId}/monitorie-associate`, {
-    method: 'POST', data: { external_id: id },
+    method: 'POST',
+    data: { external_id: id },
   });
   assert.equal(noManual.status, 404);
   const first = await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, {
-    method: 'POST', data: {},
+    method: 'POST',
+    data: {},
   });
   assert.equal((await first.json()).status, 'scanning');
   await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
   const noMac = await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, {
-    method: 'POST', data: {},
+    method: 'POST',
+    data: {},
   });
   assert.equal((await noMac.json()).status, 'scanning');
   const unlinked = await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, {
-    method: 'POST', data: {},
+    method: 'POST',
+    data: {},
   });
   assert.equal((await unlinked.json()).status, 'unlinked');
   assert.equal(
@@ -1021,7 +1039,8 @@ test('pareamento por MAC e código; associação só por telemetria mac exata li
   await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
   await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, { method: 'POST', data: {} });
   const associated = await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, {
-    method: 'POST', data: {},
+    method: 'POST',
+    data: {},
   });
   assert.equal((await associated.json()).status, 'linked');
   const second = await admin.request('/api/admin/devices', {
@@ -1036,10 +1055,14 @@ test('pareamento por MAC e código; associação só por telemetria mac exata li
   await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
   await admin.request(`/api/admin/devices/${secondId}/monitorie-discover`, { method: 'POST', data: {} });
   const alreadyUsed = await admin.request(`/api/admin/devices/${secondId}/monitorie-discover`, {
-    method: 'POST', data: {},
+    method: 'POST',
+    data: {},
   });
   assert.equal(alreadyUsed.status, 409);
-  assert.equal((await db.prepare('SELECT external_id FROM devices WHERE id=?').bind(secondId).first()).external_id, null);
+  assert.equal(
+    (await db.prepare('SELECT external_id FROM devices WHERE id=?').bind(secondId).first()).external_id,
+    null,
+  );
   await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
   const snapshot = await client.request(`/api/device/snapshot?reservoir_id=${reservoir.id}`);
   assert.equal(snapshot.status, 200, JSON.stringify(await snapshot.clone().json()));
@@ -1063,7 +1086,10 @@ test('pareamento por MAC e código; associação só por telemetria mac exata li
   await admin.request(`/api/admin/devices/${secondId}/monitorie-discover`, { method: 'POST', data: {} });
   await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
   await admin.request(`/api/admin/devices/${secondId}/monitorie-discover`, { method: 'POST', data: {} });
-  const waAssociated = await admin.request(`/api/admin/devices/${secondId}/monitorie-discover`, { method: 'POST', data: {} });
+  const waAssociated = await admin.request(`/api/admin/devices/${secondId}/monitorie-discover`, {
+    method: 'POST',
+    data: {},
+  });
   assert.equal((await waAssociated.json()).status, 'linked');
   await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
   const waSnapshot = await client.request(`/api/device/snapshot?reservoir_id=${waReservoir.id}`);
@@ -1074,11 +1100,19 @@ test('pareamento por MAC e código; associação só por telemetria mac exata li
   assert.equal(waPayload.data.consumo_acumulado, 345);
   assert.ok(monitorieRequests.at(-1).includes(waId));
   const correctedMac = await admin.request(`/api/admin/devices/${deviceId}/update`, {
-    method: 'POST', data: { mac_address: '02:11:22:33:44:77', confirm_linked_modification: true },
+    method: 'POST',
+    data: { mac_address: '02:11:22:33:44:77', confirm_linked_modification: true },
   });
   assert.equal(correctedMac.status, 200);
-  assert.equal((await db.prepare('SELECT external_id FROM devices WHERE id=?').bind(deviceId).first()).external_id, null);
-  assert.equal((await (await client.request(`/api/device/snapshot?reservoir_id=${reservoir.id}`)).json()).device.telemetry_linked, false);
+  assert.equal(
+    (await db.prepare('SELECT external_id FROM devices WHERE id=?').bind(deviceId).first()).external_id,
+    null,
+  );
+  assert.equal(
+    (await (await client.request(`/api/device/snapshot?reservoir_id=${reservoir.id}`)).json()).device
+      .telemetry_linked,
+    false,
+  );
   monitorieFixture.mac = '02:11:22:33:44:77';
   monitorieFixture.type = 'SM-WA';
   await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
@@ -1086,10 +1120,14 @@ test('pareamento por MAC e código; associação só por telemetria mac exata li
   await db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
   await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, { method: 'POST', data: {} });
   const wrongModel = await admin.request(`/api/admin/devices/${deviceId}/monitorie-discover`, {
-    method: 'POST', data: {},
+    method: 'POST',
+    data: {},
   });
   assert.equal((await wrongModel.json()).status, 'unlinked');
-  assert.equal((await db.prepare('SELECT external_id FROM devices WHERE id=?').bind(deviceId).first()).external_id, null);
+  assert.equal(
+    (await db.prepare('SELECT external_id FROM devices WHERE id=?').bind(deviceId).first()).external_id,
+    null,
+  );
   await configure();
 });
 
@@ -1097,10 +1135,13 @@ test('primeiro titular vê último estado real; transferência oculta leitura an
   const jwt = `e30.${Buffer.from(JSON.stringify({ exp: seconds() + 3600 })).toString('base64url')}.sig`;
   monitorieFixture = { id: 'external-1', jwt, readingTs: Date.now() - 3600000 };
   await configure({
-    MONITORIE_MODE: 'live', MONITORIE_JWT: jwt,
+    MONITORIE_MODE: 'live',
+    MONITORIE_JWT: jwt,
     MONITORIE_SMWU_MAPPING: JSON.stringify({
-      distancia: { key: 'd', unit: 'cm' }, nivel: { key: 'nivel', unit: '%' },
-      volume: { key: 'volume', unit: 'L' }, rssi_wifi: { key: 'rssi_wifi', unit: 'dBm' },
+      distancia: { key: 'd', unit: 'cm' },
+      nivel: { key: 'nivel', unit: '%' },
+      volume: { key: 'volume', unit: 'L' },
+      rssi_wifi: { key: 'rssi_wifi', unit: 'dBm' },
     }),
   });
   const code = await provision(1, 'monitorie');
@@ -1240,7 +1281,11 @@ test('ativação pelo cliente, isolamento completo na transferência e impedimen
 
   const pairB = await clientB.request('/api/devices/connect', {
     method: 'POST',
-    data: { pairing_code: codeB, mac_address: 'AA:BB:CC:DD:EE:13', reservoir_name: 'Novo Reservatório Cliente B' },
+    data: {
+      pairing_code: codeB,
+      mac_address: 'AA:BB:CC:DD:EE:13',
+      reservoir_name: 'Novo Reservatório Cliente B',
+    },
   });
   assert.equal(pairB.status, 201);
   const resIdB = (await pairB.json()).data.id;

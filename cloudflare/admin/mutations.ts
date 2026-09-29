@@ -95,10 +95,13 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
         'DEVICE_LINKED_IMMUTABLE',
         'Confirme explicitamente a alteração do equipamento vinculado.',
       );
-    const identityChanged = device.source === 'monitorie' &&
+    const identityChanged =
+      device.source === 'monitorie' &&
       (type !== device.device_type || (device.mac_address !== null && mac !== device.mac_address));
     statements.push(
-      c.env.DB.prepare('UPDATE devices SET device_type=?,mac_address=?,external_id=?,reported_status=?,last_seen=?,updated_at=? WHERE id=?').bind(
+      c.env.DB.prepare(
+        'UPDATE devices SET device_type=?,mac_address=?,external_id=?,reported_status=?,last_seen=?,updated_at=? WHERE id=?',
+      ).bind(
         type,
         mac,
         identityChanged ? null : device.external_id,
@@ -107,7 +110,10 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
         time,
         deviceId,
       ),
-      auditStatement(c, 'device_updated', deviceId, { device_type: type, telemetry_unlinked: identityChanged }),
+      auditStatement(c, 'device_updated', deviceId, {
+        device_type: type,
+        telemetry_unlinked: identityChanged,
+      }),
     );
   } else if (action === 'delete') {
     const data = await body(c, ['confirmation']);
