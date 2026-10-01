@@ -55,5 +55,19 @@ test.describe('Painel Administrativo', () => {
     await page.fill('#pairing-reservoir-name', 'Hidrômetro pendente');
     await page.click('#pairing-confirm-form button[type="submit"]');
     await expect(page.locator('#system-status-title')).toHaveText('Telemetria não vinculada');
+
+    // A ação administrativa usa o ID do dispositivo, não o ID do reservatório.
+    await page.goto('/admin');
+    const linkedRow = page.locator('#devices-table-body tr', { hasText: newDeviceMac.toUpperCase() });
+    await expect(linkedRow.locator('button[data-action="unlinkDevice"]')).toBeVisible();
+    page.once('dialog', (dialog) => dialog.accept());
+    const unlinkResponse = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' && /\/api\/admin\/devices\/\d+\/unlink$/.test(response.url()),
+    );
+    await linkedRow.locator('button[data-action="unlinkDevice"]').click();
+    expect((await unlinkResponse).status()).toBe(200);
+    await expect(linkedRow).toContainText('Disponível');
+    await expect(linkedRow.locator('button[data-action="unlinkDevice"]')).toHaveCount(0);
   });
 });

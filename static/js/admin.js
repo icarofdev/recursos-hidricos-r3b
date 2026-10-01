@@ -5,6 +5,57 @@ function apiUrl(endpoint) {
 }
 
 let CSRF_TOKEN = '';
+let pendingReauth = null;
+
+function askForRecentTotp() {
+  if (pendingReauth) return pendingReauth;
+  const modal = document.getElementById('admin-reauth-modal');
+  const form = document.getElementById('admin-reauth-form');
+  const cancel = document.getElementById('admin-reauth-cancel');
+  if (!modal || !form || !cancel) return Promise.reject(new Error('Confirmação indisponível.'));
+  const input = form.elements.code;
+  const error = document.getElementById('admin-reauth-error');
+  pendingReauth = new Promise((resolve, reject) => {
+    const close = () => {
+      modal.hidden = true;
+      input.value = '';
+      error.textContent = '';
+      form.removeEventListener('submit', submit);
+      cancel.removeEventListener('click', dismiss);
+    };
+    const dismiss = () => {
+      close();
+      reject(new Error('Ação cancelada.'));
+    };
+    const submit = async (event) => {
+      event.preventDefault();
+      if (!form.reportValidity()) return;
+      const button = form.querySelector('button[type="submit"]');
+      button.disabled = true;
+      error.textContent = '';
+      try {
+        await request('/api/auth/admin-totp/reauth', {
+          method: 'POST',
+          data: { code: input.value },
+          reauthRetry: false,
+        });
+        close();
+        resolve();
+      } catch (failure) {
+        error.textContent = failure.message;
+      } finally {
+        button.disabled = false;
+      }
+    };
+    form.addEventListener('submit', submit);
+    cancel.addEventListener('click', dismiss);
+    modal.hidden = false;
+    input.focus();
+  }).finally(() => {
+    pendingReauth = null;
+  });
+  return pendingReauth;
+}
 
 function escapeHTML(str) {
   return String(str ?? '')
@@ -15,7 +66,7 @@ function escapeHTML(str) {
     .replace(/'/g, '&#039;');
 }
 
-async function request(url, { method = 'GET', data = null } = {}) {
+async function request(url, { method = 'GET', data = null, reauthRetry = true } = {}) {
   const isMutation = method !== 'GET' && method !== 'HEAD';
   const payloadData = data !== null ? data : isMutation ? {} : null;
   const res = await fetch(apiUrl(url), {
@@ -37,6 +88,39 @@ async function request(url, { method = 'GET', data = null } = {}) {
   const payload = await res.json().catch(() => ({}));
   if (payload?.csrf_token) CSRF_TOKEN = payload.csrf_token;
 
+  if (res.status === 403 && payload?.error?.code === 'ADMIN_REAUTH_REQUIRED' && reauthRetry) {
+    await askForRecentTotp();
+    return request(url, { method, data, reauthRetry: false });
+  }
+
+  if (res.status === 404 && payload?.error?.code === 'NOT_FOUND' && url.startsWith('/api/admin/')) {
+    // The Worker hides admin routes when a session has lost its MFA claim. Check auth
+    // before reporting a missing resource; leave genuine route/ID errors intact.
+    let authRes;
+    try {
+      authRes = await fetch(apiUrl('/api/auth/me'), {
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+      });
+    } catch {
+      // Preserve the original API error if the auth check itself cannot be reached.
+    }
+    if (authRes?.status === 401) {
+      window.location.assign(`/login?next=${encodeURIComponent(location.pathname)}`);
+      throw new Error('Sua sessão expirou. Entre novamente.');
+    }
+    if (authRes?.ok) {
+      const auth = await authRes.json().catch(() => ({}));
+      if (auth.admin_mfa_required) {
+        window.location.assign(`/login?next=${encodeURIComponent(location.pathname)}`);
+        throw new Error('Confirme o código do autenticador para continuar.');
+      }
+      if (auth.user?.role !== 'admin') {
+        throw new Error('Acesso administrativo indisponível para esta conta.');
+      }
+    }
+  }
+
   if (!res.ok) {
     const err = new Error(payload?.error?.message || `Erro ${res.status}`);
     err.status = res.status;
@@ -50,6 +134,10 @@ async function loadAuth() {
   try {
     const me = await request('/api/auth/me');
     if (me?.csrf_token) CSRF_TOKEN = me.csrf_token;
+    if (me?.admin_mfa_required) {
+      window.location.assign('/login?next=/admin');
+      return false;
+    }
     if (me?.user?.role !== 'admin') {
       document.getElementById('admin-unauthorized').hidden = false;
       document.getElementById('admin-content').hidden = true;
@@ -75,9 +163,7 @@ async function loadDevices() {
       select.replaceChildren();
       for (const dev of res.data || []) {
         if (dev.source === 'monitorie' && dev.mac_address) {
-          select.add(
-            new Option(`${dev.device_type} · ${dev.mac_address}`, String(dev.id)),
-          );
+          select.add(new Option(`${dev.device_type} · ${dev.mac_address}`, String(dev.id)));
         }
       }
       if ([...select.options].some((option) => option.value === previous)) select.value = previous;
@@ -316,13 +402,17 @@ document.addEventListener('DOMContentLoaded', async () => {
     const deviceId = Number(document.getElementById('associate-device').value);
     try {
       const result = await request(`/api/admin/devices/${deviceId}/monitorie-discover`, { method: 'POST' });
-      associationFeedback.textContent = result.status === 'linked'
-        ? 'Telemetria vinculada: MAC exato confirmado em um único dispositivo acessível.'
-        : result.status === 'scanning'
-          ? `Consulta em andamento (${result.checked} dispositivos verificados). Aguarde 70 segundos e consulte a próxima etapa.`
-          : result.reason || 'Telemetria não vinculada.';
+      associationFeedback.textContent =
+        result.status === 'linked'
+          ? 'Telemetria vinculada: MAC exato confirmado em um único dispositivo acessível.'
+          : result.status === 'scanning'
+            ? `Consulta em andamento (${result.checked} dispositivos verificados). Aguarde 70 segundos e consulte a próxima etapa.`
+            : result.reason || 'Telemetria não vinculada.';
       associationFeedback.dataset.tone = result.status === 'linked' ? 'success' : 'info';
-      if (result.status === 'linked') { await loadDevices(); await loadAudit(); }
+      if (result.status === 'linked') {
+        await loadDevices();
+        await loadAudit();
+      }
     } catch (error) {
       associationFeedback.textContent = `Erro: ${error.message}`;
       associationFeedback.dataset.tone = 'error';

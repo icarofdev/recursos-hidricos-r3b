@@ -229,3 +229,23 @@
 [data-tone="admin-tone-5"]{color:#94a3b8}
 [data-tone="admin-tone-6"]{color:#ef4444}
 [data-tone="info"]{color:#38bdf8}[data-tone="success"]{color:#4ade80}[data-tone="error"]{color:#ef4444}
+#admin-reauth-modal[hidden] { display: none; }
+#admin-reauth-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: grid;
+    place-items: center;
+    background: rgba(0, 0, 0, 0.65);
+    padding: 1rem;
+}
+#admin-reauth-modal .modal-card {
+    width: min(100%, 28rem);
+    padding: 1.5rem;
+    border-radius: 12px;
+    background: var(--color-surface);
+    color: var(--color-text);
+}
+.admin-reauth-form { display: grid; gap: 0.75rem; }
+.admin-reauth-form input { padding: 0.75rem; }
+.admin-reauth-form .modal-actions { display: flex; justify-content: flex-end; gap: 0.75rem; }

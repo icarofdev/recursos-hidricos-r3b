@@ -624,6 +624,58 @@ test('pareamento atômico, autorização entre usuários, renomeação e histór
   const next = await connect(loser, nextCode);
   assert.equal((await (await loser.request('/api/device/history?reservoir_id=' + next.id)).json()).count, 0);
 });
+test('contrato de adicionar e desvincular distingue vínculo existente, ID ausente e rota ausente', async () => {
+  const client = browser();
+  await client.register();
+  const code = await provision();
+  const connected = await client.request('/api/devices/connect', {
+    method: 'POST',
+    data: { pairing_code: code, mac_address: '', reservoir_name: 'Teste isolado' },
+  });
+  assert.equal(connected.status, 201);
+  const reservoir = (await connected.json()).data;
+  assert.equal(reservoir.name, 'Teste isolado');
+  assert.equal(reservoir.device.id, 1);
+  const missingId = reservoir.id + 10000;
+  const missing = await client.request('/api/devices/unlink', {
+    method: 'POST',
+    data: { reservoir_id: missingId, confirmation: true },
+  });
+  assert.equal(missing.status, 404);
+  assert.equal((await missing.json()).error.code, 'RESERVOIR_NOT_FOUND');
+  assert.equal(
+    (await db.prepare('SELECT unlinked_at FROM reservoirs WHERE id=?').bind(reservoir.id).first())
+      .unlinked_at,
+    null,
+  );
+  const unlinked = await client.request('/api/devices/unlink', {
+    method: 'POST',
+    data: { reservoir_id: reservoir.id, confirmation: true },
+  });
+  assert.equal(unlinked.status, 200);
+  assert.equal((await unlinked.json()).success, true);
+  assert.ok(
+    (await db.prepare('SELECT unlinked_at FROM reservoirs WHERE id=?').bind(reservoir.id).first())
+      .unlinked_at,
+  );
+  assert.equal(
+    (await db.prepare('SELECT owner_user_id FROM devices WHERE id=1').first()).owner_user_id,
+    null,
+  );
+  assert.equal((await (await client.request('/api/reservoirs')).json()).count, 0);
+  const repeated = await client.request('/api/devices/unlink', {
+    method: 'POST',
+    data: { reservoir_id: reservoir.id, confirmation: true },
+  });
+  assert.equal(repeated.status, 404);
+  assert.equal((await repeated.json()).error.code, 'RESERVOIR_NOT_FOUND');
+  const unknownRoute = await client.request('/api/devices/unlink-missing', {
+    method: 'POST',
+    data: { reservoir_id: reservoir.id, confirmation: true },
+  });
+  assert.equal(unknownRoute.status, 404);
+  assert.equal((await unknownRoute.json()).error.code, 'NOT_FOUND');
+});
 test('Monitorie ausente retorna erro controlado e cache negativo; conta continua acessível', async () => {
   const client = browser();
   await client.register();
@@ -845,6 +897,63 @@ test('cadastro administrativo de SM-WU e SM-WA, validação de unicidade e model
 
   await configure();
 });
+test('admin cadastra e desvincula dispositivo por ID; ID inexistente preserva o vínculo', async () => {
+  const admin = browser();
+  const adminUser = await admin.register('admin-unlink@example.test');
+  await db.prepare("UPDATE users SET role='admin' WHERE id=?").bind(adminUser.id).run();
+  const owner = browser();
+  await owner.register('owner-unlink@example.test');
+
+  const created = await admin.request('/api/admin/devices', {
+    method: 'POST',
+    data: { device_type: 'SM-WU', mac_address: '02:00:00:00:00:01', source: 'monitorie' },
+  });
+  assert.equal(created.status, 201);
+  const device = (await created.json()).device;
+  assert.equal(device.mac_address, '02:00:00:00:00:01');
+  const duplicate = await admin.request('/api/admin/devices', {
+    method: 'POST',
+    data: { device_type: 'SM-WU', mac_address: '02:00:00:00:00:01', source: 'monitorie' },
+  });
+  assert.equal(duplicate.status, 409);
+  assert.equal((await duplicate.json()).error.code, 'RESOURCE_CONFLICT');
+  const generated = await admin.request(`/api/admin/devices/${device.id}/generate-code`, {
+    method: 'POST',
+    data: {},
+  });
+  assert.equal(generated.status, 200);
+  const code = (await generated.json()).activation_code;
+  const reservoir = await connect(owner, code, 'Vínculo de teste', device.mac_address);
+
+  const missing = await admin.request(`/api/admin/devices/${device.id + 10000}/unlink`, {
+    method: 'POST',
+    data: {},
+  });
+  assert.equal(missing.status, 404);
+  assert.equal((await missing.json()).error.code, 'DEVICE_NOT_FOUND');
+  assert.equal(
+    (await db.prepare('SELECT unlinked_at FROM reservoirs WHERE id=?').bind(reservoir.id).first())
+      .unlinked_at,
+    null,
+  );
+  const unlinked = await admin.request(`/api/admin/devices/${device.id}/unlink`, {
+    method: 'POST',
+    data: {},
+  });
+  assert.equal(unlinked.status, 200);
+  assert.equal((await unlinked.json()).success, true);
+  assert.ok(
+    (await db.prepare('SELECT unlinked_at FROM reservoirs WHERE id=?').bind(reservoir.id).first())
+      .unlinked_at,
+  );
+  assert.equal(
+    (await db.prepare('SELECT owner_user_id FROM devices WHERE id=?').bind(device.id).first()).owner_user_id,
+    null,
+  );
+  const listed = await (await admin.request('/api/admin/devices')).json();
+  assert.equal(listed.data.find((entry) => entry.id === device.id).owner, null);
+});
+
 
 test('migração aditiva preserva códigos, ativação e vínculo legados sem supor MAC', async () => {
   const legacy = new Miniflare({ ...options(), d1Databases: { DB: 'migration-only' } });

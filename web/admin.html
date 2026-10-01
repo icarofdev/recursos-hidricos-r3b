@@ -178,10 +178,19 @@
 
         <section class="surface admin-card">
           <h2 class="card-title">Localizar telemetria pelo MAC</h2>
-          <p class="section-description">Selecione um equipamento sem telemetria vinculada e avance a consulta. Cada etapa lê a lista ou a chave de telemetria “mac” de um dispositivo na MonitorIE. A associação ocorre somente após verificar a lista inteira e encontrar o MAC exato uma única vez no mesmo modelo.</p>
+          <p class="section-description">
+            Selecione um equipamento sem telemetria vinculada e avance a consulta. Cada etapa lê a lista ou a
+            chave de telemetria “mac” de um dispositivo na MonitorIE. A associação ocorre somente após
+            verificar a lista inteira e encontrar o MAC exato uma única vez no mesmo modelo.
+          </p>
           <form id="associate-monitorie-form" class="admin-form-grid">
-            <label class="form-field"><span>Equipamento cadastrado</span><select id="associate-device" required></select></label>
-            <div class="form-actions-full"><button type="submit" class="primary-button">Consultar próxima etapa</button></div>
+            <label class="form-field"
+              ><span>Equipamento cadastrado</span
+              ><select id="associate-device" required></select
+            ></label>
+            <div class="form-actions-full">
+              <button type="submit" class="primary-button">Consultar próxima etapa</button>
+            </div>
           </form>
           <p class="form-feedback" id="associate-feedback" role="status"></p>
         </section>
@@ -258,6 +267,29 @@
           <button type="button" class="secondary-button" id="btn-confirm-cancel">Cancelar</button>
           <button type="button" class="critical-button" id="btn-confirm-ok">Confirmar Operação</button>
         </div>
+      </section>
+    </div>
+    <div class="modal-backdrop" id="admin-reauth-modal" hidden>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="admin-reauth-title">
+        <h2 id="admin-reauth-title">Confirme esta ação</h2>
+        <p>Digite um código atual do seu autenticador. Códigos de recuperação não são aceitos aqui.</p>
+        <form id="admin-reauth-form" class="admin-reauth-form">
+          <label for="admin-reauth-code">Código do autenticador</label>
+          <input
+            id="admin-reauth-code"
+            name="code"
+            inputmode="numeric"
+            pattern="[0-9]{6}"
+            maxlength="6"
+            autocomplete="one-time-code"
+            required
+          />
+          <p id="admin-reauth-error" role="alert"></p>
+          <div class="modal-actions">
+            <button type="button" class="secondary-button" id="admin-reauth-cancel">Cancelar</button>
+            <button type="submit" class="primary-button">Confirmar código</button>
+          </div>
+        </form>
       </section>
     </div>
   </body>
