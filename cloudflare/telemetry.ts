@@ -8,6 +8,7 @@ import { clientIP, rateLimit } from './auth/rate-limit';
 import { requireUser } from './auth/sessions';
 import { owned, present } from './db/reservoirs';
 import { remoteHistory, remoteSnapshot, validateReading } from './monitorie/cache';
+import { configuredReading } from './reservoir-volume';
 
 type LocalReading = Omit<Reading, 'timestamp'> & { created_at: number };
 type LocalSMWAReading = Omit<SMWAReading, 'timestamp'> & { created_at: number };
@@ -61,6 +62,9 @@ async function snapshot(c: Context, row: ReservoirRow): Promise<Snapshot> {
   if (age >= result.device.offline_after_seconds) result.device.status = 'offline';
   result.device.telemetry_linked = row.source !== 'monitorie' || row.external_id !== null;
   result.units = telemetryUnits(row.source, row.device_type, c.env);
+  if (result.data && row.user_id !== c.user?.id && Date.parse(result.data.timestamp) < row.linked_at * 1000)
+    result.data = null;
+  if (result.data) result.data = configuredReading(row, result.data);
   return result;
 }
 

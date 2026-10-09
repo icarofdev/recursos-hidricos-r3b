@@ -1,25 +1,28 @@
 /* =========================================================
-   Hidra R3B — Tema e Cores Compartilhadas (Claro / Escuro / Auto)
+   Hidra FJK — Tema e Cores Compartilhadas (Claro / Escuro / Auto)
    ========================================================= */
 
 :root,
 [data-theme="light"],
 :root[data-theme="light"] {
     color-scheme: light;
-    --color-background: #f3f7fa;
+    --color-background: #f5f7f4;
     --color-surface: #ffffff;
-    --color-surface-subtle: #f7fafc;
-    --color-surface-strong: #edf4f7;
-    --color-sidebar: #0b2638;
-    --color-sidebar-active: #123b53;
-    --color-primary: #0c5674;
-    --color-primary-strong: #073b55;
-    --color-water: #0f9fbc;
-    --color-water-light: #51c9dc;
-    --color-water-soft: #e1f6f9;
-    --color-text: #142733;
+    --color-surface-subtle: #f6f8f7;
+    --color-surface-strong: #eef2f1;
+    --color-sidebar: #102a35;
+    --color-sidebar-active: #1e5360;
+    --color-primary: #148a8a;
+    --color-action: #117676;
+    --color-action-text: #ffffff;
+    --color-link: #107474;
+    --color-primary-strong: #102a35;
+    --color-water: #148a8a;
+    --color-water-light: #6bc9c6;
+    --color-water-soft: #e3f3f0;
+    --color-text: #102a35;
     --color-text-secondary: #536975;
-    --color-text-muted: #788b95;
+    --color-text-muted: #5c727b;
     --color-border: #dce7ec;
     --color-border-strong: #c8d8df;
     --color-success: #177a5b;
@@ -33,11 +36,11 @@
     --color-card-bg: #ffffff;
     --color-input-bg: #ffffff;
     --color-input-border: #dce7ec;
-    --color-input-text: #142733;
-    --color-tooltip-bg: #0b2638;
+    --color-input-text: #102a35;
+    --color-tooltip-bg: #102a35;
     --color-tooltip-text: #ffffff;
     --color-chart-grid: #e6eef1;
-    --color-chart-tick: #788b95;
+    --color-chart-tick: #5c727b;
     --color-topbar-bg: rgba(255, 255, 255, 0.93);
     --shadow-xs: 0 1px 2px rgba(8, 39, 56, 0.035);
     --shadow-sm: 0 5px 18px rgba(8, 39, 56, 0.055);
@@ -45,60 +48,63 @@
 
     /* Variáveis do layout de autenticação */
     --surface: #ffffff;
-    --background: #f2f7fa;
+    --background: #f5f7f4;
     --border: #d7e5ec;
     --text: #173247;
     --muted: #607886;
-    --shadow: 0 24px 70px rgba(7, 29, 42, .14);
+    --shadow: 0 24px 70px rgba(7, 29, 42, 0.14);
 }
 
 [data-theme="dark"],
 :root[data-theme="dark"] {
     color-scheme: dark;
-    --color-background: #071722;
-    --color-surface: #0c2333;
-    --color-surface-subtle: #0f2b3e;
-    --color-surface-strong: #13344b;
-    --color-sidebar: #05141f;
-    --color-sidebar-active: #0c2a3d;
-    --color-primary: #148db6;
-    --color-primary-strong: #1cb0df;
-    --color-water: #18b3d4;
-    --color-water-light: #5de0f5;
-    --color-water-soft: rgba(24, 179, 212, 0.16);
-    --color-text: #e1edf2;
-    --color-text-secondary: #9cb3c0;
-    --color-text-muted: #6f8694;
-    --color-border: #16364a;
-    --color-border-strong: #214b66;
+    --color-background: #14181e;
+    --color-surface: #1c222a;
+    --color-surface-subtle: #222932;
+    --color-surface-strong: #2c3540;
+    --color-sidebar: #101b25;
+    --color-sidebar-active: #173f47;
+    --color-primary: #55c9c1;
+    --color-action: #55c9c1;
+    --color-action-text: #102A35;
+    --color-link: #78d6ce;
+    --color-primary-strong: #7adbd3;
+    --color-water: #55c9c1;
+    --color-water-light: #83ddd8;
+    --color-water-soft: rgba(85, 201, 193, 0.1);
+    --color-text: #edf0f4;
+    --color-text-secondary: #b2bdc9;
+    --color-text-muted: #a8b4c1;
+    --color-border: #333c47;
+    --color-border-strong: #485565;
     --color-success: #2ecb93;
     --color-success-soft: rgba(46, 203, 147, 0.15);
-    --color-warning: #eab308;
+    --color-warning: #d89b32;
     --color-warning-soft: rgba(234, 179, 8, 0.15);
-    --color-critical: #ef4444;
+    --color-critical: #ff8c86;
     --color-critical-soft: rgba(239, 68, 68, 0.15);
     --color-offline: #8ea3b0;
     --color-offline-soft: rgba(142, 163, 176, 0.15);
-    --color-card-bg: #0c2333;
-    --color-input-bg: #081d2b;
-    --color-input-border: #1a4561;
-    --color-input-text: #e1edf2;
-    --color-tooltip-bg: #05141f;
+    --color-card-bg: #1c222a;
+    --color-input-bg: #181e26;
+    --color-input-border: #485565;
+    --color-input-text: #edf0f4;
+    --color-tooltip-bg: #091b23;
     --color-tooltip-text: #ffffff;
     --color-chart-grid: rgba(255, 255, 255, 0.08);
-    --color-chart-tick: #8ea3b0;
-    --color-topbar-bg: rgba(12, 35, 51, 0.93);
+    --color-chart-tick: #a8b4c1;
+    --color-topbar-bg: rgba(28, 34, 42, 0.95);
     --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.35);
     --shadow-sm: 0 5px 18px rgba(0, 0, 0, 0.4);
     --shadow-md: 0 14px 38px rgba(0, 0, 0, 0.5);
 
     /* Variáveis do layout de autenticação */
-    --surface: #0c2333;
-    --background: #071722;
-    --border: #16364a;
-    --text: #e1edf2;
-    --muted: #8ea3b0;
-    --shadow: 0 24px 70px rgba(0, 0, 0, .45);
+    --surface: #1c222a;
+    --background: #14181e;
+    --border: #333c47;
+    --text: #edf0f4;
+    --muted: #b2bdc9;
+    --shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
 }
 
 /* =========================================================
@@ -119,8 +125,8 @@
 }
 
 [data-theme="dark"] .theme-selector {
-    background: #071722;
-    border-color: #16364a;
+    background: var(--color-input-bg);
+    border-color: var(--color-border);
 }
 
 .theme-option {
@@ -170,7 +176,7 @@
 }
 
 [data-theme="dark"] .theme-option.is-selected {
-    background: #13344b !important;
+    background: var(--color-surface-strong) !important;
     color: #ffffff !important;
     border-color: var(--color-primary) !important;
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
@@ -214,4 +220,107 @@
         width: 15px;
         height: 15px;
     }
+}
+
+/* IBM Plex is served locally, including Portuguese glyphs. */
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('../fonts/IBMPlexSans-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('../fonts/IBMPlexSans-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('../fonts/IBMPlexSans-SemiBold.woff2') format('woff2');
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Sans';
+  src: url('../fonts/IBMPlexSans-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'IBM Plex Mono';
+  src: url('../fonts/IBMPlexMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+:root {
+  --font-sans: 'IBM Plex Sans', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, monospace;
+  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23536975' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+[data-theme='dark'] {
+  --select-arrow: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23b2bdc9' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}
+code,
+.technical-value,
+input[name='mac'],
+#pairing-mac,
+#detail-device-id {
+  font-family: var(--font-mono);
+  font-weight: 400;
+}
+select {
+  appearance: none;
+  background-image: var(--select-arrow) !important;
+  background-repeat: no-repeat !important;
+  background-position: right 12px center !important;
+  padding-right: 38px !important;
+  color: var(--color-input-text);
+  background-color: var(--color-input-bg);
+}
+select option {
+  color: var(--color-input-text);
+  background: var(--color-input-bg);
+}
+:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 3px;
+}
+.brand-logo {
+  display: block;
+  flex: 0 0 auto;
+  width: 100%;
+  max-width: 216px;
+  border-radius: 8px;
+  background: #f5f7f4;
+  overflow: hidden;
+}
+.brand-logo img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.theme-option {
+  font-family: var(--font-sans);
+  min-height: 34px;
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
 }

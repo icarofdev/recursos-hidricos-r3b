@@ -8,7 +8,7 @@ test.describe('Autenticação de Usuários', () => {
     password: 'Senha-Segura-E2E-12345',
   };
 
-  test('deve registrar um novo usuário e redirecionar para a dashboard', async ({ page }) => {
+  test('deve registrar sem validar e-mail e pedir login', async ({ page }) => {
     await page.goto('/cadastro');
     await expect(page).toHaveTitle(/Criar conta/);
 
@@ -19,7 +19,11 @@ test.describe('Autenticação de Usuários', () => {
 
     await page.click('button[type="submit"]');
 
-    // Após registro com sucesso, é redirecionado para a dashboard (/)
+    await expect(page.locator('[data-success-message]')).toContainText('Entre para continuar');
+    await page.goto('/login');
+    await page.fill('#login-form input[name="email"]', testUser.email);
+    await page.fill('#login-form input[name="password"]', testUser.password);
+    await page.click('#login-form button[type="submit"]');
     await expect(page).toHaveURL(/\/(?:#.*)?$/);
     await expect(page.locator('#topbar-reservoir-name')).toBeVisible();
   });
@@ -34,6 +38,9 @@ test.describe('Autenticação de Usuários', () => {
     await page.click('button[type="submit"]');
 
     await expect(page).toHaveURL(/\/(?:#.*)?$/);
+
+    // O carregamento da conta também instala o CSRF da sessão no dashboard.
+    await expect(page.locator('#account-title')).toHaveText(testUser.name);
 
     // Abrir menu da conta e clicar em Sair
     await page.click('#account-trigger');

@@ -1,5 +1,6 @@
 import { HttpError, secret } from '../http';
 import type { Env } from '../types';
+import { isCommonPassword } from './common-passwords';
 
 const encoder = new TextEncoder();
 export function randomToken(bytes = 32): string {
@@ -30,7 +31,7 @@ export function equal(a: string, b: string): boolean {
 }
 export function validatePassword(value: string, confirmation: string): void {
   if (
-    encoder.encode(value).length < 8 ||
+    [...value].length < 8 ||
     encoder.encode(value).length > 128 ||
     !/[A-Z]/.test(value) ||
     !/[a-z]/.test(value) ||
@@ -42,6 +43,7 @@ export function validatePassword(value: string, confirmation: string): void {
       'WEAK_PASSWORD',
       'A senha deve conter no mínimo 8 caracteres, incluindo letras maiúsculas, minúsculas, números e caracteres especiais.',
     );
+  if (isCommonPassword(value)) throw new HttpError(422, 'COMMON_PASSWORD', 'Escolha uma senha menos comum.');
   if (!equal(value, confirmation))
     throw new HttpError(422, 'PASSWORD_MISMATCH', 'A confirmação da senha não corresponde.');
 }

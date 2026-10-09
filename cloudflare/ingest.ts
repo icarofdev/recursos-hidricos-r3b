@@ -4,6 +4,8 @@ import { sha256 } from './auth/crypto';
 import { clientIP, rateLimit } from './auth/rate-limit';
 import { validateReading } from './monitorie/cache';
 import { guard } from './admin/audit';
+import { calculateVolume } from './reservoir-volume';
+import type { ReservoirRow } from './types';
 
 /** Internal direct-ingestion contract. This is NOT a MonitorIE payload mapping. */
 export async function ingest(c: Context): Promise<Response> {
@@ -53,6 +55,25 @@ export async function ingest(c: Context): Promise<Response> {
       : ['distancia', 'nivel', 'volume', 'rssi_wifi'];
   if (Object.keys(normalized).some((key) => !['id', 'device_type', 'timestamp', ...fields].includes(key)))
     throw invalid();
+  if (type === 'SM-WU') {
+    const config = await c.env.DB.prepare(
+      'SELECT geometry,measurement_config,capacity_liters FROM reservoirs WHERE device_id=? AND unlinked_at IS NULL',
+    )
+      .bind(id)
+      .first<ReservoirRow>();
+    if (config && config.geometry !== 'reported') {
+      const distance = normalized.distancia;
+      if (
+        typeof distance !== 'number' &&
+        !(typeof distance === 'string' && /^[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?$/i.test(distance.trim()))
+      )
+        throw invalid();
+      const calculated = calculateVolume(config, Number(distance));
+      if (calculated.volume === null) throw invalid();
+      normalized.nivel = calculated.nivel;
+      normalized.volume = calculated.volume;
+    }
+  }
   const time = now();
   let timestamp = time;
   if (normalized.timestamp !== undefined) {

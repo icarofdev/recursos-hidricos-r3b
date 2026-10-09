@@ -3,7 +3,9 @@ import { readFile, readdir, mkdir, copyFile, writeFile, rm } from 'node:fs/promi
 import path from 'node:path';
 import { cp } from 'node:fs/promises';
 import { configuration } from './config.mjs';
+import { sourceRevision } from './revision.mjs';
 const config = configuration(process.argv.includes('--production'));
+const revision = await sourceRevision();
 const output = path.resolve('dist');
 if (path.dirname(output) !== process.cwd()) throw new Error('Diretório de saída inválido');
 
@@ -39,12 +41,17 @@ for (const file of staticAssets) {
     });
   else await copyFile(file, `dist/frontend/${file}`);
 }
+// Self-hosted frontend identity assets keep the existing font/img CSP intact.
+for (const directory of ['fonts', 'images']) {
+  await cp(`static/${directory}`, `dist/frontend/static/${directory}`, { recursive: true });
+}
 
 // 3. Injetar config.js no frontend
 await writeFile(
   'dist/frontend/static/js/config.js',
   `window.__API_BASE__ = ${JSON.stringify(config.api)};\n`,
 );
+await writeFile('dist/frontend/build-info.json', JSON.stringify({ revision, worker: config.api }) + '\n');
 
 // 4. Copiar páginas HTML para dist/frontend (assegurando ausência de placeholders)
 const htmlPages = [
@@ -110,6 +117,7 @@ await build({
   outfile: 'dist/worker/index.js',
   sourcemap: false,
   legalComments: 'none',
+  define: { __BUILD_REVISION__: JSON.stringify(revision) },
 });
 
 // 7. Auditoria de segurança rigorosa em dist/frontend

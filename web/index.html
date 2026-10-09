@@ -5,17 +5,17 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Central de monitoramento do reservatório Hidra R3B com telemetria em tempo real."
+      content="Central de monitoramento do reservatório Hidra FJK com telemetria em tempo real."
     />
     <meta name="theme-color" content="#0b2638" />
     <meta name="csrf-token" content="" />
-    <title>Hidra R3B — Central de Monitoramento</title>
-    <link rel="stylesheet" href="static/css/theme.css" />
-    <link rel="stylesheet" href="static/css/dashboard.css" />
-    <script src="static/js/theme.js"></script>
-    <script src="static/js/config.js"></script>
-    <script defer src="static/js/vendor/chart.umd.min.js"></script>
-    <script defer src="static/js/dashboard.js"></script>
+    <title>Hidra FJK — Central de Monitoramento</title>
+    <link rel="stylesheet" href="/static/css/theme.css" />
+    <link rel="stylesheet" href="/static/css/dashboard.css" />
+    <script src="/static/js/theme.js"></script>
+    <script src="/static/js/config.js"></script>
+    <script defer src="/static/js/vendor/chart.umd.min.js"></script>
+    <script defer src="/static/js/dashboard.js"></script>
   </head>
   <body class="is-loading">
     <div class="demo-banner" hidden>Demonstração local — os dados de telemetria são simulados.</div>
@@ -80,13 +80,9 @@
 
     <aside class="sidebar" id="sidebar" aria-label="Navegação principal">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true"
-          ><svg><use href="#icon-droplet"></use></svg
-        ></span>
-        <span class="brand-copy"
-          ><strong>Hidra <b>R3B</b></strong
-          ><small>Central de Monitoramento</small></span
-        >
+        <span class="brand-logo"
+          ><img src="/static/images/hidra-fjk.png" alt="Hidra FJK" width="2172" height="724"
+        /></span>
         <button class="icon-button sidebar-close" id="sidebar-close" type="button" aria-label="Fechar menu">
           <svg aria-hidden="true"><use href="#icon-close"></use></svg>
         </button>
@@ -94,25 +90,25 @@
 
       <p class="nav-label">Navegação</p>
       <nav class="primary-nav" aria-label="Seções da dashboard">
-        <a class="nav-link is-active" href="#visao-geral" data-section="visao-geral" aria-current="page"
+        <a class="nav-link is-active" href="/" data-section="visao-geral" aria-current="page"
           ><svg aria-hidden="true"><use href="#icon-overview"></use></svg><span>Visão geral</span></a
         >
-        <a class="nav-link" href="#monitoramento" data-section="monitoramento"
-          ><svg aria-hidden="true"><use href="#icon-activity"></use></svg><span>Monitoramento</span></a
-        >
-        <a class="nav-link" href="#historico" data-section="historico"
-          ><svg aria-hidden="true"><use href="#icon-history"></use></svg><span>Histórico</span></a
-        >
-        <a class="nav-link" href="#alertas" data-section="alertas"
-          ><svg aria-hidden="true"><use href="#icon-bell"></use></svg><span>Alertas</span
-          ><span class="nav-count" id="nav-alert-count" aria-label="0 alertas">0</span></a
-        >
-        <a class="nav-link" href="#dispositivos" data-section="dispositivos"
+        <a class="nav-link" href="/dispositivos" data-section="dispositivos"
           ><svg aria-hidden="true"><use href="#icon-device"></use></svg><span>Dispositivos</span></a
         >
-        <a class="nav-link" href="#configuracoes" data-section="configuracoes"
+        <a class="nav-link" href="/reservatorios" data-section="reservatorios"
+          ><svg aria-hidden="true"><use href="#icon-droplet"></use></svg><span>Reservatórios</span></a
+        >
+        <a class="nav-link" href="/historico" data-section="historico"
+          ><svg aria-hidden="true"><use href="#icon-history"></use></svg><span>Histórico</span></a
+        >
+        <a class="nav-link" href="/configuracoes" data-section="configuracoes"
           ><svg aria-hidden="true"><use href="#icon-settings"></use></svg><span>Configurações</span></a
         >
+        <div class="sidebar-alert-summary">
+          <span>Alertas ativos</span
+          ><span class="nav-count" id="nav-alert-count" aria-label="0 alertas">0</span>
+        </div>
       </nav>
 
       <div class="sidebar-footer">
@@ -171,7 +167,7 @@
               <button type="button" role="menuitem" id="open-account">
                 <svg aria-hidden="true"><use href="#icon-user"></use></svg>Minha conta
               </button>
-              <a href="#configuracoes" role="menuitem"
+              <a href="/configuracoes" role="menuitem" data-app-route
                 ><svg aria-hidden="true"><use href="#icon-settings"></use></svg>Configurações</a
               >
               <button type="button" role="menuitem" id="logout-button">
@@ -186,10 +182,10 @@
         <section class="page-intro" id="visao-geral" aria-labelledby="page-intro-title">
           <div>
             <div class="breadcrumb">
-              <span>Hidra R3B</span><svg aria-hidden="true"><use href="#icon-chevron"></use></svg
-              ><span>Visão geral</span>
+              <span>Hidra FJK</span><svg aria-hidden="true"><use href="#icon-chevron"></use></svg
+              ><span id="screen-breadcrumb">Visão geral</span>
             </div>
-            <h2 id="page-intro-title">Visão geral do sistema</h2>
+            <h2 id="page-intro-title">Visão geral</h2>
             <p class="location-line" id="monitored-device">Carregando seus reservatórios…</p>
           </div>
           <div class="page-intro-actions">
@@ -214,7 +210,7 @@
             ><svg><use href="#icon-droplet"></use></svg
           ></span>
           <p class="eyebrow">Primeiro acesso</p>
-          <h2 id="welcome-title">Bem-vindo ao Hidra R3B</h2>
+          <h2 id="welcome-title">Bem-vindo ao Hidra FJK</h2>
           <p>Você ainda não possui nenhum dispositivo conectado.</p>
           <button class="primary-button" id="connect-first-device" type="button">
             <svg aria-hidden="true"><use href="#icon-plus"></use></svg>Conectar dispositivo
@@ -643,7 +639,7 @@
                   <svg class="theme-icon" aria-hidden="true" viewBox="0 0 24 24">
                     <rect x="2" y="3" width="20" height="14" rx="2" />
                     <path d="M8 21h8M12 17v4" /></svg
-                  ><span>Automático</span>
+                  ><span>Sistema</span>
                 </button>
                 <button
                   type="button"
@@ -782,48 +778,8 @@
             <dd>Sessão protegida e isolada por usuário</dd>
           </div>
           <div>
-            <dt id="theme-modal-label">Aparência do sistema</dt>
-            <dd class="theme-margin">
-              <div class="theme-selector" role="radiogroup" aria-labelledby="theme-modal-label">
-                <button
-                  type="button"
-                  class="theme-option"
-                  role="radio"
-                  data-theme-value="auto"
-                  aria-checked="false"
-                >
-                  <svg class="theme-icon" aria-hidden="true" viewBox="0 0 24 24">
-                    <rect x="2" y="3" width="20" height="14" rx="2" />
-                    <path d="M8 21h8M12 17v4" /></svg
-                  ><span>Automático</span>
-                </button>
-                <button
-                  type="button"
-                  class="theme-option"
-                  role="radio"
-                  data-theme-value="light"
-                  aria-checked="false"
-                >
-                  <svg class="theme-icon" aria-hidden="true" viewBox="0 0 24 24">
-                    <circle cx="12" cy="12" r="5" />
-                    <path
-                      d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"
-                    /></svg
-                  ><span>Claro</span>
-                </button>
-                <button
-                  type="button"
-                  class="theme-option"
-                  role="radio"
-                  data-theme-value="dark"
-                  aria-checked="false"
-                >
-                  <svg class="theme-icon" aria-hidden="true" viewBox="0 0 24 24">
-                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" /></svg
-                  ><span>Escuro</span>
-                </button>
-              </div>
-            </dd>
+            <dt>Preferências da tela</dt>
+            <dd><a class="text-button" href="/configuracoes">Abrir Aparência em Configurações</a></dd>
           </div>
         </dl>
       </section>

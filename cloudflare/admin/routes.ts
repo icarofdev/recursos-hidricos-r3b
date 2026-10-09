@@ -1,7 +1,8 @@
 import type { Context, DeviceType } from '../types';
 import { body, HttpError, iso, json, method, now, positiveId, queryInt, string } from '../http';
-import { csrf, requireAdmin } from '../auth/sessions';
+import { requireAdmin, requireRecentAdmin } from '../auth/sessions';
 import { clientIP, rateLimit } from '../auth/rate-limit';
+import { securityEvent } from '../auth/security-events';
 import { randomToken, sha256 } from '../auth/crypto';
 import { deviceMutation } from './mutations';
 
@@ -28,7 +29,7 @@ interface AdminDeviceRow {
 
 export async function adminRoute(c: Context, path: string): Promise<Response> {
   // Usuários comuns e anônimos recebem 404 (impossibilitando descoberta)
-  requireAdmin(c);
+  const admin = requireAdmin(c);
   await rateLimit(c, 'admin-action', clientIP(c), 120, 60);
 
   if (path === '/api/admin/devices' && c.request.method === 'GET') {
@@ -78,6 +79,30 @@ export async function adminRoute(c: Context, path: string): Promise<Response> {
           : null,
       })),
     });
+  }
+
+  const action =
+    c.request.method === 'POST'
+      ? path === '/api/admin/devices'
+        ? 'device_create'
+        : path
+            .match(
+              /^\/api\/admin\/devices\/\d+\/(generate-code|revoke-code|unlink|transfer|update|rotate-token|revoke-token|delete|monitorie-discover)$/,
+            )?.[1]
+            ?.replaceAll('-', '_')
+      : null;
+  if (action) {
+    try {
+      requireRecentAdmin(c);
+      const mutation = await deviceMutation(c, path);
+      if (mutation) {
+        await securityEvent(c, `admin_${action}`, 'success', admin.id);
+        return mutation;
+      }
+    } catch (error) {
+      await securityEvent(c, `admin_${action}`, 'failure', admin.id);
+      throw error;
+    }
   }
 
   const mutation = await deviceMutation(c, path);

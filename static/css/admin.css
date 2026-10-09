@@ -28,8 +28,8 @@
 
 .badge-admin {
     display: inline-block;
-    background: var(--color-primary);
-    color: #ffffff;
+    background: var(--color-action);
+    color: var(--color-action-text);
     font-size: 0.7rem;
     padding: 0.2rem 0.5rem;
     border-radius: 4px;
@@ -87,6 +87,27 @@
     border: 1px solid var(--color-input-border);
     color: var(--color-input-text);
 }
+
+#admin-reauth-modal[hidden] { display: none; }
+#admin-reauth-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    display: grid;
+    place-items: center;
+    background: rgba(0, 0, 0, 0.65);
+    padding: 1rem;
+}
+#admin-reauth-modal .modal-card {
+    width: min(100%, 28rem);
+    padding: 1.5rem;
+    border-radius: 12px;
+    background: var(--color-surface);
+    color: var(--color-text);
+}
+.admin-reauth-form { display: grid; gap: 0.75rem; }
+.admin-reauth-form input { padding: 0.75rem; }
+.admin-reauth-form .modal-actions { display: flex; justify-content: flex-end; gap: 0.75rem; }
 
 .form-actions-full {
     grid-column: 1 / -1;
@@ -176,7 +197,7 @@
     font-weight: 700;
     letter-spacing: 2px;
     color: var(--color-water);
-    font-family: monospace;
+    font-family: var(--font-mono);
 }
 
 .code-expires-text {

@@ -27,6 +27,10 @@ export function configuration(production = false, env = process.env) {
   };
   const pages = {
     '/': 'index.html',
+    '/dispositivos': 'index.html',
+    '/reservatorios': 'index.html',
+    '/historico': 'index.html',
+    '/configuracoes': 'index.html',
     '/login': 'login.html',
     '/cadastro': 'register.html',
     '/esqueci-senha': 'forgot-password.html',

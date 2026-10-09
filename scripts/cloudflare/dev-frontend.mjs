@@ -19,6 +19,8 @@ export async function frontendServer(port = 8788) {
         '.js': 'text/javascript; charset=utf-8',
         '.css': 'text/css; charset=utf-8',
         '.json': 'application/json',
+        '.png': 'image/png',
+        '.woff2': 'font/woff2',
       };
       res.writeHead(200, {
         ...config.headers,

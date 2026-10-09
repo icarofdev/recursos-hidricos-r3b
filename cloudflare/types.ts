@@ -7,10 +7,10 @@ export interface Env {
   APP_URL?: string;
   SESSION_SECRET?: string;
   PASSWORD_PEPPER?: string;
-  BREVO_API_KEY?: string;
-  BREVO_SENDER_EMAIL?: string;
-  BREVO_SENDER_NAME?: string;
+  RESEND_API_KEY?: string;
+  EMAIL_FROM?: string;
   MAIL_MODE?: string;
+  TOTP_ENCRYPTION_KEY?: string;
   MONITORIE_MODE?: string;
   MONITORIE_JWT?: string;
   MONITORIE_USERNAME?: string;
@@ -49,6 +49,7 @@ export interface Session {
   csrf_token: string;
   remember: number;
   read_only: number;
+  admin_mfa_at: number | null;
   created_at: number;
   last_seen: number;
   rotated_at: number;
@@ -74,6 +75,11 @@ export interface ReservoirRow {
   device_code: string;
   device_type: DeviceType;
   capacity_liters: number | null;
+  installation_type: string;
+  geometry: string;
+  measurement_config: string | null;
+  access_linked_at: number;
+  user_count: number;
   linked_at: number;
   source: 'monitorie' | 'local' | 'mock';
   external_id: string | null;

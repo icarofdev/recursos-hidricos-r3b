@@ -81,6 +81,7 @@ export async function newSession(
   user: User | null,
   remember = false,
   readOnly = false,
+  adminMfaAt: number | null = null,
 ): Promise<void> {
   const time = now();
   const token = randomToken();
@@ -93,6 +94,7 @@ export async function newSession(
     csrf_token: randomToken(),
     remember: Number(remember),
     read_only: Number(readOnly),
+    admin_mfa_at: adminMfaAt,
     created_at: time,
     last_seen: time,
     rotated_at: time,
@@ -108,8 +110,8 @@ export async function newSession(
     );
   statements.push(
     c.env.DB.prepare(
-      `INSERT INTO sessions(token_hash,user_id,session_version,csrf_token,remember,read_only,created_at,last_seen,rotated_at,expires_at)
- VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO sessions(token_hash,user_id,session_version,csrf_token,remember,read_only,admin_mfa_at,created_at,last_seen,rotated_at,expires_at)
+ VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
     ).bind(
       session.token_hash,
       session.user_id,
@@ -117,6 +119,7 @@ export async function newSession(
       session.csrf_token,
       session.remember,
       session.read_only,
+      session.admin_mfa_at,
       time,
       time,
       time,
@@ -140,8 +143,19 @@ export function requireUser(c: Context): User {
   return c.user;
 }
 export function requireAdmin(c: Context): User {
-  if (!c.user || c.user.role !== 'admin') throw new HttpError(404, 'NOT_FOUND', 'Recurso não encontrado.');
+  if (!c.user || c.user.role !== 'admin' || !c.session?.admin_mfa_at || c.session.read_only)
+    throw new HttpError(404, 'NOT_FOUND', 'Recurso não encontrado.');
   return c.user;
+}
+export function requireRecentAdmin(c: Context): User {
+  const user = requireAdmin(c);
+  if (!c.session?.admin_mfa_at || c.session.admin_mfa_at < now() - 300)
+    throw new HttpError(
+      403,
+      'ADMIN_REAUTH_REQUIRED',
+      'Confirme um código do autenticador para continuar esta ação administrativa.',
+    );
+  return user;
 }
 export function csrf(c: Context): void {
   sameOrigin(c);

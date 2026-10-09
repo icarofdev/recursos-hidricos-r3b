@@ -4,10 +4,16 @@ import { randomBytes } from 'node:crypto';
 import { unstable_splitSqlQuery } from 'wrangler';
 import { readDevVars } from './dev-vars.mjs';
 
-export async function localRuntime({ port, ephemeral = false, monitorie = false } = {}) {
-  await mkdir('.runtime/local', { recursive: true });
-  const file = '.runtime/local/secrets.json';
-  if (!ephemeral)
+export async function localRuntime({ port, ephemeral = false, monitorie = false, skipDevVars = false } = {}) {
+  const e2e = process.env.HIDRA_E2E_NO_DEV_VARS === '1';
+  const runId = process.env.HIDRA_E2E_RUN_ID;
+  if (e2e && !/^[a-f0-9]{24}$/.test(runId ?? '')) throw new Error('Identificador E2E inválido');
+  const runtimeRoot = e2e ? `.runtime/e2e/${runId}` : '.runtime/local';
+  const appUrl =
+    process.env.HIDRA_E2E_NO_DEV_VARS === '1' ? 'http://127.0.0.1:18888' : 'http://127.0.0.1:8788';
+  await mkdir(runtimeRoot, { recursive: true });
+  const file = `${runtimeRoot}/secrets.json`;
+  if (!ephemeral && !e2e)
     try {
       await writeFile(
         file,
@@ -20,13 +26,14 @@ export async function localRuntime({ port, ephemeral = false, monitorie = false 
     } catch (e) {
       if (e.code !== 'EEXIST') throw e;
     }
-  const keys = ephemeral
-    ? {
-        SESSION_SECRET: randomBytes(32).toString('base64url'),
-        PASSWORD_PEPPER: randomBytes(32).toString('base64url'),
-      }
-    : JSON.parse(await readFile(file, 'utf8'));
-  const dev = monitorie ? await readDevVars() : {};
+  const keys =
+    ephemeral || e2e
+      ? {
+          SESSION_SECRET: randomBytes(32).toString('base64url'),
+          PASSWORD_PEPPER: randomBytes(32).toString('base64url'),
+        }
+      : JSON.parse(await readFile(file, 'utf8'));
+  const dev = skipDevVars || process.env.HIDRA_E2E_NO_DEV_VARS === '1' ? {} : await readDevVars();
   const monitorieBindings = Object.fromEntries(
     [
       'MONITORIE_JWT',
@@ -44,6 +51,7 @@ export async function localRuntime({ port, ephemeral = false, monitorie = false 
     !(monitorieBindings.MONITORIE_USERNAME && monitorieBindings.MONITORIE_PASSWORD)
   )
     throw new Error('Configure MONITORIE_USERNAME/MONITORIE_PASSWORD ou MONITORIE_JWT em .dev.vars.');
+  const mailEnabled = dev.MAIL_MODE === 'resend';
   const mf = new Miniflare({
     modules: true,
     scriptPath: 'dist/worker/index.js',
@@ -51,35 +59,42 @@ export async function localRuntime({ port, ephemeral = false, monitorie = false 
     host: '127.0.0.1',
     ...(port ? { port } : {}),
     d1Databases: { DB: 'hidra-local' },
-    d1Persist: ephemeral ? false : '.runtime/local/d1',
+    d1Persist: ephemeral ? false : `${runtimeRoot}/d1`,
     log: new Log(LogLevel.ERROR),
     bindings: {
       ...keys,
       APP_ENV: 'development',
-      APP_URL: 'http://127.0.0.1:8788',
-      CORS_ORIGINS: 'http://127.0.0.1:8788',
+      APP_URL: appUrl,
+      CORS_ORIGINS: appUrl,
       MONITORIE_MODE: monitorie ? 'live' : 'mock',
       ...monitorieBindings,
-      MAIL_MODE: 'disabled',
+      MAIL_MODE: mailEnabled ? 'resend' : 'disabled',
+      RESEND_API_KEY: mailEnabled ? (dev.RESEND_API_KEY ?? '') : '',
+      EMAIL_FROM: mailEnabled ? (dev.EMAIL_FROM ?? '') : '',
+      TOTP_ENCRYPTION_KEY: dev.TOTP_ENCRYPTION_KEY || process.env.TOTP_ENCRYPTION_KEY || '',
       INGEST_ENABLED: 'true',
     },
-    outboundService: monitorie
-      ? async (request) => {
-          const target = new URL(request.url);
-          const authPost =
-            request.method === 'POST' && ['/api/auth/login', '/api/auth/token'].includes(target.pathname);
-          if (target.origin !== 'https://monitorie.com.br' || (request.method !== 'GET' && !authPost))
-            throw new Error('Destino externo não permitido no modo MonitorIE local');
-          return fetch(request.url, {
-            method: request.method,
-            headers: request.headers,
-            ...(authPost ? { body: request.body, duplex: 'half' } : {}),
-            redirect: 'manual',
-          });
-        }
-      : () => {
-          throw new Error('Rede externa desativada no ambiente local');
-        },
+    outboundService: async (request) => {
+      const target = new URL(request.url);
+      const resend =
+        mailEnabled &&
+        target.origin === 'https://api.resend.com' &&
+        target.pathname === '/emails' &&
+        request.method === 'POST';
+      const monitorieAuthPost =
+        request.method === 'POST' && ['/api/auth/login', '/api/auth/token'].includes(target.pathname);
+      const monitorieRequest =
+        monitorie &&
+        target.origin === 'https://monitorie.com.br' &&
+        (request.method === 'GET' || monitorieAuthPost);
+      if (!resend && !monitorieRequest) throw new Error('Destino externo não permitido no ambiente local');
+      return fetch(request.url, {
+        method: request.method,
+        headers: request.headers,
+        ...(request.method === 'POST' ? { body: request.body, duplex: 'half' } : {}),
+        redirect: 'manual',
+      });
+    },
   });
   const db = await mf.getD1Database('DB');
   await db.exec('CREATE TABLE IF NOT EXISTS local_migrations (name TEXT PRIMARY KEY)');

@@ -1,3 +1,4 @@
+import { bindMacInput } from './mac.js';
 const API_BASE = window.__API_BASE__ || document.querySelector('meta[name="api-base"]')?.content || '';
 function apiUrl(endpoint) {
   if (!API_BASE || endpoint.startsWith('http://') || endpoint.startsWith('https://')) return endpoint;
@@ -5,6 +6,57 @@ function apiUrl(endpoint) {
 }
 
 let CSRF_TOKEN = '';
+let pendingReauth = null;
+
+function askForRecentTotp() {
+  if (pendingReauth) return pendingReauth;
+  const modal = document.getElementById('admin-reauth-modal');
+  const form = document.getElementById('admin-reauth-form');
+  const cancel = document.getElementById('admin-reauth-cancel');
+  if (!modal || !form || !cancel) return Promise.reject(new Error('Confirmação indisponível.'));
+  const input = form.elements.code;
+  const error = document.getElementById('admin-reauth-error');
+  pendingReauth = new Promise((resolve, reject) => {
+    const close = () => {
+      modal.hidden = true;
+      input.value = '';
+      error.textContent = '';
+      form.removeEventListener('submit', submit);
+      cancel.removeEventListener('click', dismiss);
+    };
+    const dismiss = () => {
+      close();
+      reject(new Error('Ação cancelada.'));
+    };
+    const submit = async (event) => {
+      event.preventDefault();
+      if (!form.reportValidity()) return;
+      const button = form.querySelector('button[type="submit"]');
+      button.disabled = true;
+      error.textContent = '';
+      try {
+        await request('/api/auth/admin-totp/reauth', {
+          method: 'POST',
+          data: { code: input.value },
+          reauthRetry: false,
+        });
+        close();
+        resolve();
+      } catch (failure) {
+        error.textContent = failure.message;
+      } finally {
+        button.disabled = false;
+      }
+    };
+    form.addEventListener('submit', submit);
+    cancel.addEventListener('click', dismiss);
+    modal.hidden = false;
+    input.focus();
+  }).finally(() => {
+    pendingReauth = null;
+  });
+  return pendingReauth;
+}
 
 function escapeHTML(str) {
   return String(str ?? '')
@@ -15,7 +67,7 @@ function escapeHTML(str) {
     .replace(/'/g, '&#039;');
 }
 
-async function request(url, { method = 'GET', data = null } = {}) {
+async function request(url, { method = 'GET', data = null, reauthRetry = true } = {}) {
   const isMutation = method !== 'GET' && method !== 'HEAD';
   const payloadData = data !== null ? data : isMutation ? {} : null;
   const res = await fetch(apiUrl(url), {
@@ -37,6 +89,26 @@ async function request(url, { method = 'GET', data = null } = {}) {
   const payload = await res.json().catch(() => ({}));
   if (payload?.csrf_token) CSRF_TOKEN = payload.csrf_token;
 
+  if (res.status === 403 && payload?.error?.code === 'ADMIN_REAUTH_REQUIRED' && reauthRetry) {
+    await askForRecentTotp();
+    return request(url, { method, data, reauthRetry: false });
+  }
+  if (res.status === 404 && payload?.error?.code === 'NOT_FOUND' && url.startsWith('/api/admin/')) {
+    const authRes = await fetch(apiUrl('/api/auth/me'), {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    if (authRes.status === 401) {
+      window.location.assign('/login?next=/admin');
+      throw new Error('Sua sessão expirou. Entre novamente.');
+    }
+    const auth = await authRes.json().catch(() => ({}));
+    if (auth.admin_mfa_required) {
+      window.location.assign('/login?next=/admin');
+      throw new Error('Confirme o autenticador para continuar.');
+    }
+  }
+
   if (!res.ok) {
     const err = new Error(payload?.error?.message || `Erro ${res.status}`);
     err.status = res.status;
@@ -50,6 +122,10 @@ async function loadAuth() {
   try {
     const me = await request('/api/auth/me');
     if (me?.csrf_token) CSRF_TOKEN = me.csrf_token;
+    if (me?.admin_mfa_required) {
+      window.location.assign('/login?next=/admin');
+      return false;
+    }
     if (me?.user?.role !== 'admin') {
       document.getElementById('admin-unauthorized').hidden = false;
       document.getElementById('admin-content').hidden = true;
@@ -248,6 +324,7 @@ function showCodeModal(code, expiresAt) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  bindMacInput(document.getElementById('device-mac'));
   const isAuthed = await loadAuth();
   if (!isAuthed) return;
 

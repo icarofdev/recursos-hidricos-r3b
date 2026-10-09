@@ -27,6 +27,12 @@ export async function maintenance(c: Context): Promise<void> {
       'DELETE FROM audit_logs WHERE id IN (SELECT id FROM audit_logs WHERE created_at<? ORDER BY created_at LIMIT ?)',
     ).bind(time - auditDays * 86400, batch),
     c.env.DB.prepare(
+      'DELETE FROM security_events WHERE id IN (SELECT id FROM security_events WHERE created_at<? ORDER BY created_at LIMIT ?)',
+    ).bind(time - auditDays * 86400, batch),
+    c.env.DB.prepare(
+      'DELETE FROM endpoint_requests WHERE rowid IN (SELECT rowid FROM endpoint_requests WHERE window_start<? ORDER BY window_start LIMIT ?)',
+    ).bind(time - 7 * 86400, batch),
+    c.env.DB.prepare(
       'DELETE FROM telemetry_cache WHERE cache_key IN (SELECT cache_key FROM telemetry_cache WHERE MAX(expires_at,lease_until,negative_until)<? LIMIT ?)',
     ).bind(time - 86400, batch),
     c.env.DB.prepare(
@@ -37,6 +43,9 @@ export async function maintenance(c: Context): Promise<void> {
     ).bind(time),
     c.env.DB.prepare(
       'DELETE FROM password_reset_tokens WHERE token_hash IN (SELECT token_hash FROM password_reset_tokens WHERE expires_at<=? LIMIT 500)',
+    ).bind(time),
+    c.env.DB.prepare(
+      'DELETE FROM admin_totp_challenges WHERE challenge_hash IN (SELECT challenge_hash FROM admin_totp_challenges WHERE expires_at<=? OR consumed_at IS NOT NULL LIMIT 500)',
     ).bind(time),
   ]);
 }

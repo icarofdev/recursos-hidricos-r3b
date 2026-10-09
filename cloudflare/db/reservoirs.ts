@@ -5,17 +5,28 @@ import { sha256 } from '../auth/crypto';
 import { clientIP, rateLimit } from '../auth/rate-limit';
 import { auditStatement } from '../admin/audit';
 import { normalizeMac } from '../admin/device-identity';
+import { guard } from '../admin/audit';
+import { validateConfiguration } from '../reservoir-volume';
 
-const select = `SELECT r.*,d.device_code,d.mac_address,d.device_type,d.source,d.external_id,d.last_seen,d.reported_status
+const select = `SELECT r.*,d.device_code,d.mac_address,d.device_type,d.source,d.external_id,d.last_seen,d.reported_status,
+ CASE WHEN du.user_id=r.user_id THEN r.linked_at ELSE MAX(r.linked_at,du.linked_at) END access_linked_at,(SELECT COUNT(*) FROM device_users WHERE device_id=d.id) user_count
  FROM reservoirs r JOIN devices d ON d.id=r.device_id
- WHERE r.user_id=? AND d.owner_user_id=? AND r.unlinked_at IS NULL`;
+ JOIN device_users du ON du.device_id=d.id
+ WHERE du.user_id=? AND d.owner_user_id=r.user_id AND r.unlinked_at IS NULL`;
 
-export async function owned(c: Context, id: number): Promise<ReservoirRow> {
+export async function owned(c: Context, id: number, manage = false): Promise<ReservoirRow> {
   const user = requireUser(c);
   const row = await c.env.DB.prepare(select + ' AND r.id=?')
-    .bind(user.id, user.id, id)
+    .bind(user.id, id)
     .first<ReservoirRow>();
   if (!row) throw new HttpError(404, 'RESERVOIR_NOT_FOUND', 'Reservatório não encontrado.');
+  if (manage && row.user_id !== user.id)
+    throw new HttpError(
+      403,
+      'OWNER_REQUIRED',
+      'Somente o proprietário pode alterar este reservatório ou gerenciar usuários.',
+    );
+  row.linked_at = row.access_linked_at;
   return row;
 }
 
@@ -25,11 +36,18 @@ export function present(c: Context, row: ReservoirRow) {
     id: row.id,
     name: row.name,
     capacity_liters: row.capacity_liters,
+    installation_type: row.installation_type,
+    geometry: row.geometry,
+    measurement_config: row.measurement_config ? JSON.parse(row.measurement_config) : null,
+    can_manage: row.user_id === c.user?.id && !c.session?.read_only,
+    user_count: row.user_count,
+    user_limit: 5,
     linked_at: iso(row.linked_at),
     device: {
       id: row.device_id,
       code: row.mac_address ?? row.device_code,
       type: row.device_type,
+      request_interval_seconds: row.source === 'monitorie' ? 70 : 0,
       telemetry_linked: row.source !== 'monitorie' || row.external_id !== null,
       status:
         (row.source !== 'monitorie' || row.external_id !== null) &&
@@ -49,12 +67,113 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
   if (path === '/api/reservoirs') {
     method(c, ['GET']);
     const { results } = await c.env.DB.prepare(select + ' ORDER BY r.created_at,r.id')
-      .bind(user.id, user.id)
+      .bind(user.id)
       .all<ReservoirRow>();
     return json({ success: true, count: results.length, data: results.map((row) => present(c, row)) });
   }
+  if (path === '/api/devices/users') {
+    method(c, ['GET']);
+    const row = await owned(c, positiveId(c.url.searchParams.get('reservoir_id')));
+    const { results } = await c.env.DB.prepare(
+      'SELECT u.id,u.name,u.email,du.linked_at FROM device_users du JOIN users u ON u.id=du.user_id WHERE du.device_id=? ORDER BY du.linked_at,u.id',
+    )
+      .bind(row.device_id)
+      .all<{ id: number; name: string; email: string; linked_at: number }>();
+    return json({
+      success: true,
+      limit: 5,
+      data: results.map((member) => ({
+        ...member,
+        email: row.user_id === user.id || member.id === user.id ? member.email : null,
+        is_owner: member.id === row.user_id,
+        linked_at: iso(member.linked_at),
+      })),
+    });
+  }
   method(c, ['POST']);
   csrf(c);
+  if (path === '/api/devices/users/add' || path === '/api/devices/users/remove') {
+    await rateLimit(c, 'device-users', String(user.id), 30, 60);
+    const add = path.endsWith('/add');
+    const data = await body(c, add ? ['reservoir_id', 'email'] : ['reservoir_id', 'user_id']);
+    const row = await owned(c, positiveId(data.reservoir_id), true);
+    const target = add
+      ? (
+          await c.env.DB.prepare('SELECT id FROM users WHERE email=?')
+            .bind(string(data, 'email', 254).trim().toLowerCase())
+            .first<{ id: number }>()
+        )?.id
+      : positiveId(data.user_id);
+    if (!target)
+      throw new HttpError(
+        404,
+        'USER_NOT_FOUND',
+        'Conta não encontrada. A pessoa precisa se cadastrar antes do vínculo.',
+      );
+    if (!add && target === row.user_id)
+      throw new HttpError(
+        422,
+        'OWNER_LINK_REQUIRED',
+        'Use a desvinculação do dispositivo para remover o proprietário.',
+      );
+    const result = await c.env.DB.batch([
+      ownerGuard(c, row),
+      add
+        ? c.env.DB.prepare(
+            'INSERT INTO device_users(device_id,user_id,linked_at) VALUES (?,?,?) RETURNING user_id',
+          ).bind(row.device_id, target, now())
+        : c.env.DB.prepare('DELETE FROM device_users WHERE device_id=? AND user_id=? RETURNING user_id').bind(
+            row.device_id,
+            target,
+          ),
+      auditStatement(
+        c,
+        add ? 'device_user_added' : 'device_user_removed',
+        row.device_id,
+        { associated_user_id: target },
+        true,
+      ),
+    ]);
+    if (!result[1].results.length) throw new HttpError(404, 'USER_LINK_NOT_FOUND', 'Vínculo não encontrado.');
+    return json({ success: true });
+  }
+  if (path === '/api/reservoirs/configuration') {
+    const data = await body(c, [
+      'reservoir_id',
+      'installation_type',
+      'geometry',
+      'capacity_liters',
+      'measurement_config',
+    ]);
+    const row = await owned(c, positiveId(data.reservoir_id), true);
+    if (!['elevated', 'building', 'underground', 'custom'].includes(String(data.installation_type)))
+      throw new HttpError(422, 'INVALID_INSTALLATION', 'Selecione um tipo de instalação.');
+    const capacity = data.capacity_liters;
+    if (
+      capacity !== null &&
+      (typeof capacity !== 'number' || !Number.isFinite(capacity) || capacity <= 0 || capacity > 1e12)
+    )
+      throw new HttpError(422, 'INVALID_CAPACITY', 'Informe uma capacidade positiva.');
+    const geometry = string(data, 'geometry', 32);
+    const config = validateConfiguration(geometry, capacity, data.measurement_config);
+    if (row.device_type !== 'SM-WU')
+      throw new HttpError(422, 'INVALID_DEVICE_TYPE', 'Configuração de volume exige sensor de nível SM-WU.');
+    await c.env.DB.batch([
+      ownerGuard(c, row),
+      c.env.DB.prepare(
+        'UPDATE reservoirs SET installation_type=?,geometry=?,capacity_liters=?,measurement_config=?,updated_at=? WHERE id=?',
+      ).bind(
+        data.installation_type,
+        geometry,
+        capacity,
+        config ? JSON.stringify(config) : null,
+        now(),
+        row.id,
+      ),
+      auditStatement(c, 'reservoir_configured', row.device_id, { reservoir_id: row.id, geometry }, true),
+    ]);
+    return json({ success: true, data: present(c, await owned(c, row.id)) });
+  }
   if (path === '/api/reservoirs/capacity') {
     const data = await body(c, ['reservoir_id', 'capacity_liters']);
     const id = positiveId(data.reservoir_id);
@@ -68,8 +187,14 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
         'INVALID_CAPACITY',
         'Informe uma capacidade positiva de até 1 trilhão de litros, ou null.',
       );
-    const row = await owned(c, id);
+    const row = await owned(c, id, true);
+    validateConfiguration(
+      row.geometry,
+      capacity,
+      row.measurement_config ? JSON.parse(row.measurement_config) : null,
+    );
     await c.env.DB.batch([
+      ownerGuard(c, row),
       c.env.DB.prepare(
         'UPDATE reservoirs SET capacity_liters=?,updated_at=? WHERE id=? AND user_id=? AND unlinked_at IS NULL',
       ).bind(capacity, now(), id, user.id),
@@ -87,8 +212,9 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
     const data = await body(c, ['reservoir_id', 'name']);
     const id = positiveId(data.reservoir_id);
     const name = reservoirName(string(data, 'name', 120));
-    await owned(c, id);
+    const row = await owned(c, id, true);
     await c.env.DB.batch([
+      ownerGuard(c, row),
       c.env.DB.prepare(
         'UPDATE reservoirs SET name=?,updated_at=? WHERE id=? AND user_id=? AND unlinked_at IS NULL',
       ).bind(name, now(), id, user.id),
@@ -103,13 +229,24 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
       throw new HttpError(422, 'INVALID_UNLINK_REQUEST', 'Confirme a desvinculação.');
     const row = await owned(c, id);
     const time = now();
+    if (row.user_id !== user.id) {
+      await c.env.DB.batch([
+        c.env.DB.prepare('DELETE FROM device_users WHERE device_id=? AND user_id=?').bind(
+          row.device_id,
+          user.id,
+        ),
+        auditStatement(c, 'device_user_left', row.device_id, undefined, true),
+      ]);
+      return json({ success: true });
+    }
     const results = await c.env.DB.batch([
+      ownerGuard(c, row),
       c.env.DB.prepare(
         'UPDATE reservoirs SET unlinked_at=?,updated_at=? WHERE id=? AND user_id=? AND unlinked_at IS NULL RETURNING id',
       ).bind(time, time, id, user.id),
       auditStatement(c, 'device_unlinked', row.device_id, { reservoir_id: id }, true),
     ]);
-    const result = results[0].results[0];
+    const result = results[1].results[0];
     if (!result) throw new HttpError(404, 'RESERVOIR_NOT_FOUND', 'Reservatório não encontrado.');
 
     return json({ success: true });
@@ -174,6 +311,14 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
     return json({ success: true, data: present(c, await owned(c, result.id)) }, 201);
   }
   throw new HttpError(404, 'NOT_FOUND', 'Recurso não encontrado.');
+}
+function ownerGuard(c: Context, row: ReservoirRow) {
+  return guard(
+    c,
+    'SELECT 1 FROM reservoirs r JOIN devices d ON d.id=r.device_id WHERE r.id=? AND r.user_id=? AND d.owner_user_id=r.user_id AND r.unlinked_at IS NULL',
+    row.id,
+    requireUser(c).id,
+  );
 }
 function reservoirName(name: string): string {
   const normalized = name.trim().replace(/\s+/g, ' ');

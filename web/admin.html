@@ -5,11 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Painel administrativo do sistema Hidra R3B para gerenciamento e ativação de dispositivos SM-WU e SM-WA."
+      content="Painel administrativo do sistema Hidra FJK para gerenciamento e ativação de dispositivos SM-WU e SM-WA."
     />
     <meta name="theme-color" content="#0b2638" />
     <meta name="csrf-token" content="" />
-    <title>Hidra R3B — Painel Administrativo</title>
+    <title>Hidra FJK — Painel Administrativo</title>
     <link rel="stylesheet" href="/static/css/theme.css" />
     <link rel="stylesheet" href="/static/css/dashboard.css" />
     <link rel="stylesheet" href="/static/css/admin.css" />
@@ -21,20 +21,10 @@
     <div class="admin-shell">
       <header class="admin-topbar">
         <div class="admin-brand">
-          <span class="brand-mark" aria-hidden="true">
-            <svg
-              viewBox="0 0 24 24"
-              width="24"
-              height="24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <path d="M12 2S5.5 9 5.5 14.5a6.5 6.5 0 0 0 13 0C18.5 9 12 2 12 2Z" />
-            </svg>
-          </span>
+          <span class="brand-logo"
+            ><img src="/static/images/hidra-fjk.png" alt="Hidra FJK" width="2172" height="724"
+          /></span>
           <div>
-            <strong>Hidra <b>R3B</b></strong>
             <span class="badge-admin">Administração</span>
           </div>
         </div>
@@ -255,6 +245,30 @@
             Entendi e Copiei o Código
           </button>
         </div>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="admin-reauth-modal" hidden>
+      <section class="modal-card" role="dialog" aria-modal="true" aria-labelledby="admin-reauth-title">
+        <h2 id="admin-reauth-title">Confirme esta ação</h2>
+        <p>Digite um código atual do seu autenticador. Códigos de recuperação não são aceitos aqui.</p>
+        <form id="admin-reauth-form" class="admin-reauth-form">
+          <label for="admin-reauth-code">Código do autenticador</label>
+          <input
+            id="admin-reauth-code"
+            name="code"
+            inputmode="numeric"
+            pattern="[0-9]{6}"
+            maxlength="6"
+            autocomplete="one-time-code"
+            required
+          />
+          <p id="admin-reauth-error" role="alert"></p>
+          <div class="modal-actions">
+            <button type="button" class="secondary-button" id="admin-reauth-cancel">Cancelar</button>
+            <button type="submit" class="primary-button">Confirmar código</button>
+          </div>
+        </form>
       </section>
     </div>
 

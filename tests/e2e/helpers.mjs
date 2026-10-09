@@ -2,7 +2,7 @@ import { localRuntime } from '../../scripts/cloudflare/local-runtime.mjs';
 import { randomBytes, createHash } from 'node:crypto';
 
 export async function promoteUserToAdmin(email) {
-  const { db, mf } = await localRuntime();
+  const { db, mf } = await localRuntime({ skipDevVars: true });
   try {
     await db.prepare("UPDATE users SET role='admin' WHERE lower(email)=lower(?)").bind(email).run();
   } finally {
@@ -11,7 +11,7 @@ export async function promoteUserToAdmin(email) {
 }
 
 export async function createPairingCodeForDevice(deviceCode = 'DEV-PAIR-TEST', deviceType = 'SM-WU') {
-  const { db, mf } = await localRuntime();
+  const { db, mf } = await localRuntime({ skipDevVars: true });
   try {
     const raw = randomBytes(16).toString('hex').toUpperCase();
     const code = 'HIDRA-' + raw.match(/.{8}/g).join('-');
@@ -27,6 +27,22 @@ export async function createPairingCodeForDevice(deviceCode = 'DEV-PAIR-TEST', d
       .first();
 
     return { deviceId: dev.id, code };
+  } finally {
+    await mf.dispose();
+  }
+}
+
+export async function expireAdminMfaForTest(email) {
+  const { db, mf } = await localRuntime({ skipDevVars: true });
+  try {
+    const user = await db.prepare('SELECT id FROM users WHERE lower(email)=lower(?)').bind(email).first();
+    const time = Math.floor(Date.now() / 1000);
+    await db.batch([
+      db.prepare('UPDATE sessions SET admin_mfa_at=? WHERE user_id=?').bind(time - 301, user.id),
+      db
+        .prepare('UPDATE admin_totp SET last_used_step=? WHERE user_id=?')
+        .bind(Math.floor(Date.now() / 30000) - 2, user.id),
+    ]);
   } finally {
     await mf.dispose();
   }

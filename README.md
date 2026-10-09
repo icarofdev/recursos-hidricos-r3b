@@ -7,7 +7,7 @@ Dashboard web preservado, arquitetura serverless moderna, sem dependência de PH
 Navegador → Frontend Estático (Vercel)
           → API REST (Cloudflare Worker) → Cloudflare D1 (contas, sessões, vínculos, telemetria)
                                         → Adaptador Monitorie (ThingsBoard PE com single-flight gate e cache)
-                                        → Brevo (recuperação de senha transacional)
+                                        → Resend (recuperação de senha transacional)
 ```
 
 **Integração Monitor IE:** O projeto tem mapeamentos previamente documentados para **SM-WU** (`d`, `nivel`, `volume`, `rssi_wifi`) e **SM-WA** (`vazao`, `consumo`, `rssi_wifi`), com cache e coordenação de consultas no D1. O Worker pode fazer login e renovar o JWT com credenciais guardadas como secrets. A correspondência entre MAC e dispositivo remoto precisa ser verificada no ambiente de execução antes de exibir leituras de um novo cadastro.
@@ -25,11 +25,11 @@ Navegador → Frontend Estático (Vercel)
    - Cabeçalhos estritos de segurança HTTP (CSP, X-Content-Type-Options, Referrer-Policy).
 2. **Backend & API (Cloudflare Worker):**
    - Implementado em TypeScript, empacotado em `dist/worker/index.js`.
-   - Roteamento nativo com validação rigorosa de entradas, CSRF tokens por sessão, rate limits por IP e identidade.
+   - Roteamento nativo com validação rigorosa de entradas, CSRF tokens por sessão e limites de login por IP, IP+e-mail e e-mail.
    - Autenticação com PBKDF2-SHA256 (100.000 iterações + pepper) e sessões criptográficas em cookies `HttpOnly`, `Secure`, `SameSite=Lax`.
 3. **Banco de Dados (Cloudflare D1):**
    - Banco relacional SQLite distribuído na borda (`hidra-r3b`, binding `DB`).
-   - Migrations versionadas (`cloudflare/migrations/0001` a `0007`).
+   - Migrations versionadas em `cloudflare/migrations/`, incluindo contadores de requisições por endpoint; veja [observação e regras Cloudflare](docs/ENDPOINT_OBSERVATION.md).
    - Integridade referencial com foreign keys, triggers de atomicidade e trilha de auditoria imutável.
 4. **Stack 100% Serverless & TypeScript:**
    - Todo o backend, frontend, integrações e rotinas de build operam de ponta a ponta em TypeScript e Node.js 22, com zero dependências de servidores ou runtimes legados.

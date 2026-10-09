@@ -1,7 +1,8 @@
 import { domainError } from './db/errors';
 import { auditStatement } from './admin/audit';
 import { body, now } from './http';
-import { csrf, requireUser, logout } from './auth/sessions';
+import { csrf, requireRecentAdmin, requireUser, logout } from './auth/sessions';
+import { securityEvent } from './auth/security-events';
 import type { Context, Env, User } from './types';
 import { HttpError, isAllowedOrigin, isLocal, json, method, secureResponse, frontendOrigin } from './http';
 import { authRoute } from './auth/routes';
@@ -13,8 +14,22 @@ import { maintenance } from './db/maintenance';
 import { telemetryRoute } from './telemetry';
 import { adminRoute } from './admin/routes';
 import { monitorieAuthConfigured } from './monitorie/auth';
+import { observeEndpoint } from './observability/endpoint-requests';
 
-const frontendPages = new Set(['/', '/login', '/cadastro', '/esqueci-senha', '/redefinir-senha', '/admin']);
+declare const __BUILD_REVISION__: string;
+
+const frontendPages = new Set([
+  '/',
+  '/dispositivos',
+  '/reservatorios',
+  '/historico',
+  '/configuracoes',
+  '/login',
+  '/cadastro',
+  '/esqueci-senha',
+  '/redefinir-senha',
+  '/admin',
+]);
 const pageAliases: Record<string, string> = {
   '/index.php': '/',
   '/index.html': '/',
@@ -33,12 +48,20 @@ const authRoutes = new Set([
   'forgot-password',
   'reset-password',
   'csrf',
+  'admin-totp/setup',
+  'admin-totp/confirm',
+  'admin-totp/verify',
+  'admin-totp/reauth',
 ]);
 const deviceRoutes = new Set(['current', 'history', 'status', 'alerts', 'snapshot', 'ingest']);
 const reservoirRoutes = new Set([
   '/api/reservoirs',
   '/api/reservoirs/rename',
   '/api/reservoirs/capacity',
+  '/api/reservoirs/configuration',
+  '/api/devices/users',
+  '/api/devices/users/add',
+  '/api/devices/users/remove',
   '/api/devices/validate-pairing',
   '/api/devices/connect',
   '/api/devices/unlink',
@@ -111,6 +134,7 @@ export default {
       }),
     );
     env.METRICS?.writeDataPoint({ blobs: [category, String(response.status)], doubles: [1, duration] });
+    ctx.waitUntil(observeEndpoint(c, response.status));
     return secureResponse(response, c);
   },
   async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
@@ -133,7 +157,13 @@ async function route(c: Context): Promise<Response> {
     return new Response(null, { status: 302, headers: { Location: frontendOrigin(c) + path } });
   if (path === '/api/health') {
     method(c, ['GET']);
-    return json({ status: 'ok' });
+    return json({
+      status: 'ok',
+      revision: __BUILD_REVISION__,
+      environment: ['production', 'preview', 'development'].includes(c.env.APP_ENV ?? '')
+        ? c.env.APP_ENV
+        : 'unknown',
+    });
   }
   if (path === '/api/ready') {
     method(c, ['GET']);
@@ -184,16 +214,23 @@ async function route(c: Context): Promise<Response> {
   if (path === '/api/auth/delete-account') {
     method(c, ['POST']);
     const user = requireUser(c);
-    csrf(c);
-    const data = await body(c, ['confirmation']);
-    if (data.confirmation !== true)
-      throw new HttpError(422, 'CONFIRMATION_REQUIRED', 'Confirme a exclus�o da conta.');
-    await c.env.DB.batch([
-      c.env.DB.prepare('DELETE FROM users WHERE id=?').bind(user.id),
-      auditStatement(c, 'account_deleted', null),
-    ]);
-    await logout(c);
-    return json({ success: true, redirect: '/login' });
+    try {
+      csrf(c);
+      if (user.role === 'admin') requireRecentAdmin(c);
+      const data = await body(c, ['confirmation']);
+      if (data.confirmation !== true)
+        throw new HttpError(422, 'CONFIRMATION_REQUIRED', 'Confirme a exclusão da conta.');
+      await c.env.DB.batch([
+        c.env.DB.prepare('DELETE FROM users WHERE id=?').bind(user.id),
+        auditStatement(c, 'account_deleted', null),
+      ]);
+      await securityEvent(c, 'account_delete', 'success', user.id);
+      await logout(c);
+      return json({ success: true, redirect: '/login' });
+    } catch (error) {
+      await securityEvent(c, 'account_delete', 'failure', user.id);
+      throw error;
+    }
   }
   if (path === '/api/device/ingest') return telemetryRoute(c, 'ingest');
   if (path.startsWith('/api/admin/')) return adminRoute(c, path);

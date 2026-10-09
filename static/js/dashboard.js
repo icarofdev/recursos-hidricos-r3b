@@ -38,6 +38,9 @@ import {
   isDeviceDisconnected,
 } from './dashboard/model.js';
 import { safeRedirect } from './redirects.js';
+import { bindMacInput } from './mac.js';
+import { mountScreens, renderScreens } from './dashboard/screens.js';
+import { bindSidebar, enhanceReservoirPicker, enhanceNumberInputs } from './dashboard/appearance.js';
 const API_BASE = window.__API_BASE__ || document.querySelector('meta[name="api-base"]')?.content || '';
 function apiUrl(endpoint) {
   if (!API_BASE || endpoint.startsWith('http://') || endpoint.startsWith('https://')) return endpoint;
@@ -295,7 +298,9 @@ function renderLatest() {
   getElement('telemetry-classification').textContent =
     nivel === null
       ? 'Valor de nível inválido na última leitura'
-      : 'Percentual informado pelo medidor ultrassônico';
+      : latest.volume_source === 'backend'
+        ? 'Volume e percentual calculados com a configuração do reservatório'
+        : 'Percentual recebido da nuvem / dispositivo';
   getElement('flow-reading').textContent =
     volume === null ? 'Não informado' : `${formatNumber(volume, 2)} ${unit('volume')}`;
   getElement('wifi-reading').textContent =
@@ -785,6 +790,14 @@ function renderHistoryTable() {
   const wrapper = getElement('history-table-wrapper');
   const tableState = getElement('table-state');
   const pagination = getElement('table-pagination');
+  if (!dashboardState.historyLastLoadedAt && !dashboardState.historyError) {
+    wrapper.hidden = true;
+    pagination.hidden = true;
+    tableState.hidden = false;
+    tableState.textContent = 'Carregando registros do período…';
+    getElement('history-count').textContent = 'Carregando';
+    return;
+  }
 
   if (dashboardState.historyError) {
     wrapper.hidden = true;
@@ -878,6 +891,7 @@ function renderAll({ includeHistory = true } = {}) {
   }
   renderAlerts();
   renderDevice();
+  renderScreens();
   document.body.classList.remove('is-loading');
 }
 
@@ -1013,7 +1027,7 @@ function renderReservoirSelector() {
     getElement('capacity-input').value = selected.capacity_liters ?? '';
     getElement('capacity-feedback').textContent = '';
     getElement('topbar-reservoir-name').textContent = selected.name;
-    getElement('page-intro-title').textContent = selected.name;
+    getElement('reservoir-title').textContent = selected.name;
     getElement('devices-title').textContent = selected.name;
     getElement('devices-count').textContent =
       dashboardState.reservoirs.length === 1
@@ -1036,6 +1050,7 @@ async function loadReservoirs(preferredId = null) {
     localStorage.removeItem('hidra:selected-reservoir');
   }
   renderReservoirSelector();
+  renderScreens();
 }
 
 async function selectReservoir(reservoirId) {
@@ -1060,9 +1075,10 @@ async function updateDashboard() {
   )
     dashboardState.historyRequestPending = true;
   const now = Date.now();
-  if (now - dashboardState.lastMonitorieRequestStarted < 70000) return;
+  const interval = (getSelectedReservoir()?.device?.request_interval_seconds ?? 70) * 1000;
+  if (now - dashboardState.lastMonitorieRequestStarted < interval) return;
   dashboardState.updateInProgress = true;
-  if (dashboardState.historyRequestPending) {
+  if (dashboardState.historyRequestPending && dashboardState.device) {
     dashboardState.lastMonitorieRequestStarted = now;
     dashboardState.lastMonitorieRequestType = 'history';
     dashboardState.historyRequestPending = false;
@@ -1099,6 +1115,7 @@ async function updateDashboard() {
     dashboardState.updateInProgress = false;
     renderAll();
   }
+  if (interval === 0 && dashboardState.historyRequestPending) await updateDashboard();
 }
 
 async function updateHistoryForRange() {
@@ -1406,8 +1423,9 @@ function bindReservoirManagement() {
     const reservoir = getSelectedReservoir();
     if (!reservoir) return;
     getElement('management-title').textContent = `Desvincular ${reservoir.name}?`;
-    getElement('management-description').textContent =
-      `O dispositivo ${reservoir.device?.code || ''} deixará de aparecer nesta conta.`;
+    getElement('management-description').textContent = reservoir.can_manage
+      ? `O dispositivo ${reservoir.device?.code || ''} será liberado e os vínculos das contas associadas serão encerrados. O histórico será preservado.`
+      : `Esta conta perderá acesso ao dispositivo ${reservoir.device?.code || ''}. Os vínculos das outras contas serão preservados.`;
     getElement('rename-form').hidden = true;
     getElement('unlink-form').hidden = false;
     getElement('unlink-feedback').textContent = '';
@@ -1483,49 +1501,21 @@ function closeMobileMenu(restoreFocus = false) {
 }
 
 function bindNavigation() {
-  const menuButton = getElement('menu-button');
-  const closeButton = getElement('sidebar-close');
-
-  menuButton.addEventListener('click', () => {
-    document.body.classList.add('menu-open');
-    menuButton.setAttribute('aria-expanded', 'true');
-    getElement('mobile-overlay').setAttribute('aria-hidden', 'false');
-    closeButton.focus();
+  mountScreens({
+    requestJSON,
+    selectReservoir,
+    updateDashboard,
+    refresh: async () => {
+      await loadReservoirs(dashboardState.selectedReservoirId);
+      resetTelemetryState();
+      dashboardState.historyRequestPending = true;
+      renderAll();
+      await updateDashboard();
+    },
   });
-
-  closeButton.addEventListener('click', () => closeMobileMenu(true));
-  getElement('mobile-overlay').addEventListener('click', () => closeMobileMenu(true));
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && document.body.classList.contains('menu-open')) closeMobileMenu(true);
-  });
-
-  document.querySelectorAll('.nav-link').forEach((link) => {
-    link.addEventListener('click', () => {
-      setActiveNavigation(link.dataset.section);
-      closeMobileMenu(false);
-      const target = getElement(link.dataset.section);
-      if (target) {
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    });
-  });
-
-  if ('IntersectionObserver' in window) {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries
-          .filter((entry) => entry.isIntersecting)
-          .sort((first, second) => second.intersectionRatio - first.intersectionRatio)[0];
-        if (visible) setActiveNavigation(visible.target.id);
-      },
-      { rootMargin: '-20% 0px -65% 0px', threshold: [0, 0.2, 0.5] },
-    );
-
-    ['visao-geral', 'monitoramento', 'alertas', 'dispositivos', 'historico', 'configuracoes']
-      .map(getElement)
-      .filter(Boolean)
-      .forEach((section) => observer.observe(section));
-  }
+  bindSidebar();
+  enhanceReservoirPicker();
+  enhanceNumberInputs();
 }
 
 function bindChartControls() {
@@ -1668,6 +1658,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   bindAccountMenu();
   bindModals();
   bindPairing();
+  bindMacInput(getElement('pairing-mac'));
   bindReservoirManagement();
   try {
     await loadCurrentUser();

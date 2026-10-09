@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="theme-color" content="#0b2638" />
     <meta name="csrf-token" content="" />
-    <title>Entrar — Hidra R3B</title>
+    <title>Entrar — Hidra FJK</title>
     <link rel="stylesheet" href="/static/css/theme.css" />
     <link rel="stylesheet" href="/static/css/auth.css" />
     <script src="/static/js/theme.js"></script>
@@ -15,12 +15,10 @@
   <body>
     <main class="auth-layout">
       <section class="auth-brand-panel">
-        <a class="auth-brand" href="/" aria-label="Hidra R3B"
-          ><span
-            ><svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 2S5.5 9 5.5 14.5a6.5 6.5 0 0 0 13 0C18.5 9 12 2 12 2Z" /></svg></span
-          ><strong>Hidra <b>R3B</b></strong></a
-        >
+        <a class="auth-brand" href="/" aria-label="Hidra FJK"
+          ><span class="brand-logo"
+            ><img src="/static/images/hidra-fjk.png" alt="Hidra FJK" width="2172" height="724" /></span
+        ></a>
         <div>
           <p class="eyebrow">Central de Monitoramento</p>
           <h1>Seus reservatórios, sob controle.</h1>
@@ -78,7 +76,11 @@
           </div>
         </div>
         <div class="auth-card">
-          <div class="mobile-brand">Hidra <b>R3B</b></div>
+          <div class="mobile-brand">
+            <span class="brand-logo"
+              ><img src="/static/images/hidra-fjk.png" alt="Hidra FJK" width="2172" height="724"
+            /></span>
+          </div>
           <p class="eyebrow">Bem-vindo de volta</p>
           <h2>Entre na sua conta</h2>
           <p class="auth-subtitle">Acesse sua central de monitoramento.</p>
@@ -133,9 +135,73 @@
               <span>Entrar</span><span class="button-loader" aria-hidden="true"></span>
             </button>
           </form>
+          <section id="totp-panel" hidden aria-live="polite">
+            <h3>Confirme seu autenticador</h3>
+            <p>Informe o código de seis dígitos do aplicativo autenticador.</p>
+            <form id="totp-form" class="auth-form">
+              <label
+                ><span>Código do autenticador</span
+                ><input
+                  name="code"
+                  inputmode="numeric"
+                  pattern="[0-9]{6}"
+                  maxlength="6"
+                  autocomplete="one-time-code"
+                  required
+              /></label>
+              <p class="form-error" data-form-error role="alert"></p>
+              <button class="auth-submit" type="submit">
+                <span>Verificar</span><span class="button-loader" aria-hidden="true"></span>
+              </button>
+            </form>
+            <button type="button" id="recovery-toggle" class="auth-text-button">
+              Usar código de recuperação
+            </button>
+            <form id="recovery-form" class="auth-form" hidden>
+              <label
+                ><span>Código de recuperação</span><input name="recovery_code" autocomplete="off" required
+              /></label>
+              <p class="form-error" data-form-error role="alert"></p>
+              <button class="auth-submit" type="submit">
+                <span>Recuperar acesso</span><span class="button-loader" aria-hidden="true"></span>
+              </button>
+            </form>
+          </section>
+          <section id="totp-setup-panel" hidden aria-live="polite">
+            <h3>Configure seu autenticador</h3>
+            <p>Escaneie o QR no aplicativo autenticador ou digite a chave. Confirme um código para ativar.</p>
+            <p id="totp-setup-loading" role="status">Preparando QR…</p>
+            <canvas id="totp-qr" role="img" aria-label="QR para configurar o autenticador"></canvas>
+            <p>Chave: <code id="totp-secret"></code></p>
+            <form id="totp-confirm-form" class="auth-form">
+              <label
+                ><span>Código do autenticador</span
+                ><input
+                  name="code"
+                  inputmode="numeric"
+                  pattern="[0-9]{6}"
+                  maxlength="6"
+                  autocomplete="one-time-code"
+                  required
+              /></label>
+              <p class="form-error" data-form-error role="alert"></p>
+              <button class="auth-submit" type="submit">
+                <span>Ativar autenticador</span><span class="button-loader" aria-hidden="true"></span>
+              </button>
+            </form>
+          </section>
+          <section id="totp-codes-panel" hidden aria-live="polite">
+            <h3>Guarde seus códigos de recuperação</h3>
+            <p>Estes códigos aparecem uma única vez. Guarde-os em lugar seguro, separado do autenticador.</p>
+            <ul id="totp-codes"></ul>
+            <button type="button" id="totp-continue" class="auth-submit">
+              Guardei os códigos; continuar
+            </button>
+          </section>
+          <button type="button" id="totp-restart" class="auth-text-button" hidden>Reiniciar login</button>
           <p class="auth-switch">Ainda não tem uma conta? <a href="/cadastro">Criar conta</a></p>
         </div>
-        <p class="auth-footer">© 2026 Hidra R3B · Conexão protegida</p>
+        <p class="auth-footer">© 2026 Hidra FJK · Conexão protegida</p>
       </section>
     </main>
   </body>

@@ -2,6 +2,7 @@ import type { Context, ReservoirRow } from './types';
 import { iso, json, now, queryInt } from './http';
 import { remoteHistory } from './monitorie/cache';
 import { telemetryUnits } from './units';
+import { configuredReading } from './reservoir-volume';
 
 export async function history(c: Context, row: ReservoirRow): Promise<Response> {
   const hours = queryInt(c, 'hours', 24, 1, 720),
@@ -39,10 +40,66 @@ export async function history(c: Context, row: ReservoirRow): Promise<Response> 
       timestamp: iso(Number(r.created_at)),
       sample_count: r.sample_count ?? 1,
     }));
+    if (row.device_type === 'SM-WU' && row.geometry !== 'reported') {
+      // Nonlinear conversion happens per sample BEFORE averaging buckets.
+      const buckets = new Map<
+        number,
+        { timestamp: number; count: number; sums: Record<string, number>; counts: Record<string, number> }
+      >();
+      data = [];
+      let cursorTime = start,
+        cursorId = 0;
+      for (;;) {
+        const page = await c.env.DB.prepare(
+          'SELECT * FROM smwu_readings WHERE reservoir_id=? AND created_at BETWEEN ? AND ? AND (created_at>? OR (created_at=? AND reading_id>?)) ORDER BY created_at,reading_id LIMIT 500',
+        )
+          .bind(row.id, start, end, cursorTime, cursorTime, cursorId)
+          .all<Record<string, unknown>>();
+        for (const raw of page.results) {
+          const converted = configuredReading(row, raw);
+          if (!resolution)
+            data.push({ ...converted, timestamp: iso(Number(raw.created_at)), sample_count: 1 });
+          else {
+            const key = Math.floor((Number(raw.created_at) - start) / resolution);
+            const bucket = buckets.get(key) ?? {
+              timestamp: Number(raw.created_at),
+              count: 0,
+              sums: {},
+              counts: {},
+            };
+            bucket.count++;
+            for (const field of fields)
+              if (typeof converted[field] === 'number') {
+                bucket.sums[field] = (bucket.sums[field] ?? 0) + Number(converted[field]);
+                bucket.counts[field] = (bucket.counts[field] ?? 0) + 1;
+              }
+            buckets.set(key, bucket);
+          }
+        }
+        if (page.results.length < 500) break;
+        const last = page.results.at(-1)!;
+        cursorTime = Number(last.created_at);
+        cursorId = Number(last.reading_id);
+      }
+      if (resolution)
+        data = [...buckets.values()].map((bucket) => ({
+          id: row.device_id,
+          timestamp: iso(bucket.timestamp),
+          sample_count: bucket.count,
+          ...Object.fromEntries(
+            fields.map((field) => [
+              field,
+              bucket.counts[field] ? bucket.sums[field] / bucket.counts[field] : null,
+            ]),
+          ),
+          measurement_quality: bucket.counts.volume === bucket.count ? 'valid' : 'contains_invalid',
+          volume_source: 'backend',
+        }));
+    }
   } else if (row.source === 'monitorie' && row.external_id === null) {
     data = [];
   } else {
-    data = (await remoteHistory(c, row, hours, limit)).map((r) => ({ ...r }));
+    data = (await remoteHistory(c, row, hours, limit)).map((r) => ({ ...configuredReading(row, r) }));
     total = data.length;
     resolution = row.source === 'mock' ? Math.max(60, Math.ceil((end - start) / Math.max(1, limit - 1))) : 0;
   }

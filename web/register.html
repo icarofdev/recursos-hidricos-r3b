@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <meta name="theme-color" content="#0b2638" />
     <meta name="csrf-token" content="" />
-    <title>Criar conta — Hidra R3B</title>
+    <title>Criar conta — Hidra FJK</title>
     <link rel="stylesheet" href="/static/css/theme.css" />
     <link rel="stylesheet" href="/static/css/auth.css" />
     <script src="/static/js/theme.js"></script>
@@ -15,12 +15,10 @@
   <body>
     <main class="auth-layout">
       <section class="auth-brand-panel">
-        <a class="auth-brand" href="/" aria-label="Hidra R3B"
-          ><span
-            ><svg viewBox="0 0 24 24" aria-hidden="true">
-              <path d="M12 2S5.5 9 5.5 14.5a6.5 6.5 0 0 0 13 0C18.5 9 12 2 12 2Z" /></svg></span
-          ><strong>Hidra <b>R3B</b></strong></a
-        >
+        <a class="auth-brand" href="/" aria-label="Hidra FJK"
+          ><span class="brand-logo"
+            ><img src="/static/images/hidra-fjk.png" alt="Hidra FJK" width="2172" height="724" /></span
+        ></a>
         <div>
           <p class="eyebrow">Conta pessoal e segura</p>
           <h1>Comece a monitorar em minutos.</h1>
@@ -80,7 +78,11 @@
           </div>
         </div>
         <div class="auth-card">
-          <div class="mobile-brand">Hidra <b>R3B</b></div>
+          <div class="mobile-brand">
+            <span class="brand-logo"
+              ><img src="/static/images/hidra-fjk.png" alt="Hidra FJK" width="2172" height="724"
+            /></span>
+          </div>
           <p class="eyebrow">Primeiro acesso</p>
           <h2>Crie sua conta</h2>
           <p class="auth-subtitle">Use seus dados para acessar a central.</p>
@@ -88,7 +90,7 @@
             class="auth-form"
             id="register-form"
             data-endpoint="/api/auth/register"
-            data-success="redirect"
+            data-success="message"
           >
             <label
               ><span>Nome</span
@@ -193,6 +195,10 @@
             <button class="auth-submit" type="submit">
               <span>Criar conta</span><span class="button-loader" aria-hidden="true"></span>
             </button>
+            <div data-success-panel hidden>
+              <p data-success-message role="status"></p>
+              <a href="/login">Ir para o login</a>
+            </div>
           </form>
           <p class="auth-switch">Já possui uma conta? <a href="/login">Entrar</a></p>
         </div>

@@ -2,10 +2,11 @@
 # npm run dev guarda secrets locais aleatórios em .runtime/local/secrets.json.
 SESSION_SECRET=
 PASSWORD_PEPPER=
+TOTP_ENCRYPTION_KEY=
 APP_URL=
-BREVO_API_KEY=
-BREVO_SENDER_EMAIL=
-BREVO_SENDER_NAME=
+RESEND_API_KEY=
+EMAIL_FROM=
+MAIL_MODE=disabled
 # Autenticação contínua no Worker. Preencha apenas no arquivo local ignorado pelo Git.
 MONITORIE_USERNAME=
 MONITORIE_PASSWORD=

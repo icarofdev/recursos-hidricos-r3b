@@ -21,25 +21,25 @@ Inventário realizado antes da implementação. `git status --short` estava vazi
 
 ## Todos os endpoints
 
-| Endpoint antigo                        | Endpoint Cloudflare                | Regra                                            |
-| -------------------------------------- | ---------------------------------- | ------------------------------------------------ |
-| POST /api/auth/register.php            | POST /api/auth/register            | Cadastro, sessão nova, CSRF, rate limit          |
-| POST /api/auth/login.php               | POST /api/auth/login               | Login e lembrar de mim                           |
-| POST /api/auth/logout.php              | POST /api/auth/logout              | Revogação da sessão                              |
-| GET /api/auth/me.php                   | GET /api/auth/me                   | Usuário e CSRF da sessão                         |
-| POST /api/auth/forgot-password.php     | POST /api/auth/forgot-password     | Resposta genérica, Brevo                         |
-| GET/POST /api/auth/reset-password.php  | GET/POST /api/auth/reset-password  | Validação/consumo atômico do token               |
-| GET /api/reservoirs/index.php          | GET /api/reservoirs                | Somente reservatórios próprios                   |
-| POST /api/reservoirs/rename.php        | POST /api/reservoirs/rename        | Nome com até 60 caracteres                       |
-| POST /api/devices/validate-pairing.php | POST /api/devices/validate-pairing | Código secreto com expiração                     |
-| POST /api/devices/connect.php          | POST /api/devices/connect          | Reivindicação atômica                            |
-| POST /api/devices/unlink.php           | POST /api/devices/unlink           | Preserva histórico, invalida pareamento          |
-| GET /api/device/current.php            | GET /api/device/current            | Última leitura autorizada                        |
-| GET /api/device/history.php            | GET /api/device/history            | Histórico autorizado, horas/limite validados     |
-| GET /api/device/status.php             | GET /api/device/status             | Estado autorizado                                |
-| GET /api/device/alerts.php             | GET /api/device/alerts             | Offline, nível <20 crítico e <40 baixo           |
-| POST /api/device/ingest.php            | POST /api/device/ingest            | Ingestão HTTPS opcional, segredo por dispositivo |
-| GET /health.php, /api/health.php       | GET /api/health                    | Saúde do D1, sem detalhes internos               |
+| Endpoint antigo                        | Endpoint Cloudflare                | Regra                                                    |
+| -------------------------------------- | ---------------------------------- | -------------------------------------------------------- |
+| POST /api/auth/register.php            | POST /api/auth/register            | Cadastro sem sessão, resposta uniforme, CSRF, rate limit |
+| POST /api/auth/login.php               | POST /api/auth/login               | Login e lembrar de mim                                   |
+| POST /api/auth/logout.php              | POST /api/auth/logout              | Revogação da sessão                                      |
+| GET /api/auth/me.php                   | GET /api/auth/me                   | Usuário e CSRF da sessão                                 |
+| POST /api/auth/forgot-password.php     | POST /api/auth/forgot-password     | Resposta genérica, Resend                                |
+| GET/POST /api/auth/reset-password.php  | GET/POST /api/auth/reset-password  | Validação/consumo atômico do token                       |
+| GET /api/reservoirs/index.php          | GET /api/reservoirs                | Somente reservatórios próprios                           |
+| POST /api/reservoirs/rename.php        | POST /api/reservoirs/rename        | Nome com até 60 caracteres                               |
+| POST /api/devices/validate-pairing.php | POST /api/devices/validate-pairing | Código secreto com expiração                             |
+| POST /api/devices/connect.php          | POST /api/devices/connect          | Reivindicação atômica                                    |
+| POST /api/devices/unlink.php           | POST /api/devices/unlink           | Preserva histórico, invalida pareamento                  |
+| GET /api/device/current.php            | GET /api/device/current            | Última leitura autorizada                                |
+| GET /api/device/history.php            | GET /api/device/history            | Histórico autorizado, horas/limite validados             |
+| GET /api/device/status.php             | GET /api/device/status             | Estado autorizado                                        |
+| GET /api/device/alerts.php             | GET /api/device/alerts             | Offline, nível <20 crítico e <40 baixo                   |
+| POST /api/device/ingest.php            | POST /api/device/ingest            | Ingestão HTTPS opcional, segredo por dispositivo         |
+| GET /health.php, /api/health.php       | GET /api/health                    | Saúde do D1, sem detalhes internos                       |
 
 Aliases `.php` permanecem apenas como rotas TypeScript para compatibilidade externa.
 Novo GET `/api/device/snapshot` agrega leitura, estado e alertas em uma requisição.
@@ -49,7 +49,7 @@ Novo GET `/api/auth/csrf` inicia uma sessão anônima para clientes que não car
 
 - Tabelas: users, devices, reservoirs, smwu_readings, sensor_readings (SM-WA legado), password_reset_tokens, rate_limits, schema_migrations.
 - Sessões PHP estavam em disco; migram para D1. Todas as sessões antigas precisarão de novo login.
-- Brevo: API transacional HTTP. Nenhuma chave antiga será copiada ou utilizada.
+- Resend: API transacional HTTP centralizada no Worker. Nenhuma chave legada da Brevo é copiada ou utilizada.
 - MQTT/EMQX, gateway HTTP local do firmware V5.10, backups/cron/systemd/Nginx: componentes legados fora do artefato publicado.
 - Compartilhamento HTTP Basic: preservar como modo opcional de leitura, com secrets novos.
 - Não foram encontradas especificações da Monitorie nem variáveis MONITORIE no ambiente existente. Nenhuma URL/credencial será presumida.

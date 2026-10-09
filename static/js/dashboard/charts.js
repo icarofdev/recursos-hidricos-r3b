@@ -42,8 +42,8 @@ function getChartColors() {
   const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
   return {
     grid: isDark ? 'rgba(255, 255, 255, 0.08)' : '#e6eef1',
-    tick: isDark ? '#8ea3b0' : '#788b95',
-    tooltipBg: isDark ? '#05141f' : '#0b2638',
+    tick: isDark ? '#8ea3b0' : '#5c727b',
+    tooltipBg: isDark ? '#05141f' : '#102A35',
   };
 }
 
@@ -103,8 +103,8 @@ function initializeCharts() {
     return;
   }
 
-  Chart.defaults.font.family = 'Inter, Segoe UI, system-ui, sans-serif';
-  Chart.defaults.color = '#788b95';
+  Chart.defaults.font.family = 'IBM Plex Sans, Segoe UI, system-ui, sans-serif';
+  Chart.defaults.color = '#5c727b';
 
   const historyOptions = baseChartOptions();
   historyOptions.plugins.tooltip.callbacks = {
@@ -136,12 +136,12 @@ function initializeCharts() {
         {
           label: 'Nível',
           data: [],
-          borderColor: '#0f9fbc',
-          backgroundColor: 'rgba(15, 159, 188, 0.08)',
+          borderColor: '#148A8A',
+          backgroundColor: 'rgba(20, 138, 138, 0.08)',
           borderWidth: 2.25,
           pointRadius: 0,
           pointHoverRadius: 4,
-          pointHoverBackgroundColor: '#0c5674',
+          pointHoverBackgroundColor: '#148A8A',
           pointHoverBorderColor: '#ffffff',
           pointHoverBorderWidth: 2,
           fill: true,
@@ -173,7 +173,7 @@ function initializeCharts() {
         {
           label: 'Consumo',
           data: [],
-          backgroundColor: 'rgba(15, 159, 188, 0.72)',
+          backgroundColor: 'rgba(20, 138, 138, 0.72)',
           hoverBackgroundColor: '#0c7895',
           borderRadius: 5,
           borderSkipped: false,
@@ -200,6 +200,17 @@ function initializeCharts() {
 function renderChart() {
   const rangeHistory = getRangeHistory();
   const isSMWA = getSelectedReservoir()?.device?.type === 'SM-WA';
+  if (!dashboardState.historyLastLoadedAt && !dashboardState.historyError) {
+    showChartState(
+      'chart-stage',
+      'chart-state-title',
+      'chart-state-description',
+      'Carregando histórico',
+      'Aguardando a consulta das leituras do período.',
+    );
+    getElement('chart-summary').textContent = 'O resumo ficará disponível após a consulta do histórico.';
+    return;
+  }
 
   if (dashboardState.historyError) {
     showChartState(
@@ -240,9 +251,9 @@ function renderChart() {
       type: 'bar',
       label: 'Consumo',
       data: consumption.points.map((point) => point.value),
-      backgroundColor: 'rgba(15, 159, 188, 0.72)',
+      backgroundColor: 'rgba(20, 138, 138, 0.72)',
       hoverBackgroundColor: '#0c7895',
-      borderColor: '#0f9fbc',
+      borderColor: '#148A8A',
       borderWidth: 0,
       borderRadius: 5,
       borderSkipped: false,
@@ -285,12 +296,12 @@ function renderChart() {
       type: 'line',
       label: 'Consumo acumulado',
       data: values,
-      borderColor: '#0f9fbc',
-      backgroundColor: 'rgba(15, 159, 188, 0.08)',
+      borderColor: '#148A8A',
+      backgroundColor: 'rgba(20, 138, 138, 0.08)',
       borderWidth: 2.25,
       pointRadius: 0,
       pointHoverRadius: 4,
-      pointHoverBackgroundColor: '#0c5674',
+      pointHoverBackgroundColor: '#148A8A',
       pointHoverBorderColor: '#ffffff',
       pointHoverBorderWidth: 2,
       fill: true,
@@ -331,12 +342,12 @@ function renderChart() {
     type: 'line',
     label: 'Nível',
     data: values,
-    borderColor: '#0f9fbc',
-    backgroundColor: 'rgba(15, 159, 188, 0.08)',
+    borderColor: '#148A8A',
+    backgroundColor: 'rgba(20, 138, 138, 0.08)',
     borderWidth: 2.25,
     pointRadius: 0,
     pointHoverRadius: 4,
-    pointHoverBackgroundColor: '#0c5674',
+    pointHoverBackgroundColor: '#148A8A',
     pointHoverBorderColor: '#ffffff',
     pointHoverBorderWidth: 2,
     fill: true,

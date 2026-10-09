@@ -1,4 +1,5 @@
 import { safeRedirect } from './redirects.js';
+import QRCode from 'qrcode';
 (() => {
   'use strict';
 
@@ -74,6 +75,7 @@ import { safeRedirect } from './redirects.js';
   }
 
   document.querySelectorAll('.auth-form[data-endpoint]').forEach((form) => {
+    if (form.id === 'login-form') return;
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
       if (!form.reportValidity()) return;
@@ -105,6 +107,137 @@ import { safeRedirect } from './redirects.js';
       }
     });
   });
+
+  const loginForm = document.getElementById('login-form');
+  if (loginForm) {
+    const verifyPanel = document.getElementById('totp-panel');
+    const setupPanel = document.getElementById('totp-setup-panel');
+    const codesPanel = document.getElementById('totp-codes-panel');
+    const restart = document.getElementById('totp-restart');
+    let challenge = '';
+    let nextPath = '/';
+    function stage(name) {
+      loginForm.hidden = name !== 'login';
+      verifyPanel.hidden = name !== 'verify';
+      setupPanel.hidden = name !== 'setup';
+      codesPanel.hidden = name !== 'codes';
+      restart.hidden = name === 'login' || name === 'codes';
+    }
+    async function submit(form, action, payload, onSuccess) {
+      const button = form.querySelector('button[type="submit"]');
+      const error = form.querySelector('[data-form-error]');
+      error.textContent = '';
+      button.disabled = true;
+      button.classList.add('is-submitting');
+      try {
+        await onSuccess(await request(action, { method: 'POST', body: JSON.stringify(payload) }));
+      } catch (failure) {
+        error.textContent = failure.message;
+      } finally {
+        button.disabled = false;
+        button.classList.remove('is-submitting');
+      }
+    }
+    async function setup() {
+      stage('setup');
+      const error = setupPanel.querySelector('[data-form-error]');
+      const loading = document.getElementById('totp-setup-loading');
+      loading.hidden = false;
+      error.textContent = '';
+      try {
+        const result = await request('/api/auth/admin-totp/setup', {
+          method: 'POST',
+          body: JSON.stringify({ challenge }),
+        });
+        document.getElementById('totp-secret').textContent = result.secret;
+        await QRCode.toCanvas(document.getElementById('totp-qr'), result.uri, {
+          width: 220,
+          margin: 2,
+          errorCorrectionLevel: 'M',
+        });
+      } catch (failure) {
+        error.textContent = failure.message;
+      } finally {
+        loading.hidden = true;
+      }
+    }
+    loginForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (!loginForm.reportValidity()) return;
+      submit(loginForm, '/api/auth/login', formPayload(loginForm), async (result) => {
+        if (!result.stage) {
+          window.location.assign(safeRedirect(result.redirect));
+          return;
+        }
+        challenge = result.challenge;
+        nextPath = safeRedirect(loginForm.elements.next.value || '/');
+        if (result.stage === 'totp_setup') await setup();
+        else stage('verify');
+      });
+    });
+    document.getElementById('totp-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      if (!form.reportValidity()) return;
+      submit(form, '/api/auth/admin-totp/verify', { challenge, code: form.elements.code.value }, (result) => {
+        window.location.assign(safeRedirect(result.redirect));
+      });
+    });
+    document.getElementById('recovery-toggle').addEventListener('click', () => {
+      document.getElementById('recovery-form').hidden = false;
+      document.getElementById('totp-form').hidden = true;
+    });
+    document.getElementById('recovery-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      if (!form.reportValidity()) return;
+      submit(
+        form,
+        '/api/auth/admin-totp/verify',
+        { challenge, recovery_code: form.elements.recovery_code.value.trim() },
+        async () => {
+          await setup();
+        },
+      );
+    });
+    document.getElementById('totp-confirm-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const form = event.currentTarget;
+      if (!form.reportValidity()) return;
+      submit(
+        form,
+        '/api/auth/admin-totp/confirm',
+        { challenge, code: form.elements.code.value },
+        (result) => {
+          challenge = '';
+          document.getElementById('totp-secret').textContent = '';
+          document.getElementById('totp-qr').getContext('2d').clearRect(0, 0, 220, 220);
+          const list = document.getElementById('totp-codes');
+          list.replaceChildren(
+            ...result.recovery_codes.map((code) => {
+              const item = document.createElement('li');
+              item.textContent = code;
+              return item;
+            }),
+          );
+          nextPath = safeRedirect(result.redirect || nextPath);
+          stage('codes');
+        },
+      );
+    });
+    document
+      .getElementById('totp-continue')
+      .addEventListener('click', () => window.location.assign(nextPath));
+    restart.addEventListener('click', () => {
+      challenge = '';
+      document.getElementById('totp-secret').textContent = '';
+      document.getElementById('totp-qr').getContext('2d').clearRect(0, 0, 220, 220);
+      document.getElementById('totp-setup-panel').querySelector('[data-form-error]').textContent = '';
+      document.getElementById('recovery-form').hidden = true;
+      document.getElementById('totp-form').hidden = false;
+      stage('login');
+    });
+  }
 
   const nextInput = document.querySelector('input[name="next"]');
   if (nextInput) {
@@ -163,7 +296,7 @@ import { safeRedirect } from './redirects.js';
     if (!checklist) return;
 
     const rules = {
-      length: (val) => val.length >= 8 && val.length <= 128,
+      length: (val) => [...val].length >= 8 && new TextEncoder().encode(val).length <= 128,
       uppercase: (val) => /[A-Z]/.test(val),
       lowercase: (val) => /[a-z]/.test(val),
       number: (val) => /[0-9]/.test(val),
@@ -190,7 +323,7 @@ import { safeRedirect } from './redirects.js';
     fetch(apiUrl('/api/auth/me'), { credentials: 'include', headers: { Accept: 'application/json' } })
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (data?.user) {
+        if (data?.user && !data.admin_mfa_required) {
           const next = new URLSearchParams(window.location.search).get('next') || '/';
           window.location.assign(safeRedirect(next));
         }

@@ -3,7 +3,8 @@
 
   function getStoredTheme() {
     try {
-      return localStorage.getItem(STORAGE_KEY) || 'auto';
+      const value = localStorage.getItem(STORAGE_KEY);
+      return ['auto', 'light', 'dark'].includes(value) ? value : 'auto';
     } catch {
       return 'auto';
     }

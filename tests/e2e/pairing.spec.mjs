@@ -15,7 +15,11 @@ test.describe('Fluxo de Pareamento de Dispositivo', () => {
     await page.fill('input[name="password"]', password);
     await page.fill('input[name="password_confirmation"]', password);
     await page.click('button[type="submit"]');
-
+    await expect(page.locator('[data-success-message]')).toContainText('Entre para continuar');
+    await page.goto('/login');
+    await page.fill('#login-form input[name="email"]', email);
+    await page.fill('#login-form input[name="password"]', password);
+    await page.click('#login-form button[type="submit"]');
     await expect(page).toHaveURL(/\/(?:#.*)?$/);
 
     // 2. Criar código de pareamento válido
@@ -25,6 +29,18 @@ test.describe('Fluxo de Pareamento de Dispositivo', () => {
     const connectButton = page.locator('#connect-first-device, #connect-device-top').first();
     await connectButton.click();
     await expect(page.locator('#pairing-modal')).toBeVisible();
+    await page.fill('#pairing-mac', 'aabbccddeeff');
+    await expect(page.locator('#pairing-mac')).toHaveValue('AA:BB:CC:DD:EE:FF');
+    await page.press('#pairing-mac', 'Backspace');
+    await expect(page.locator('#pairing-mac')).toHaveValue('AA:BB:CC:DD:EE:F');
+    await page.fill('#pairing-mac', 'aa:bb:cc:dd:ee:ff');
+    await expect(page.locator('#pairing-mac')).toHaveValue('AA:BB:CC:DD:EE:FF');
+    await page.locator('#pairing-mac').evaluate((input) => input.setSelectionRange(3, 3));
+    await page.press('#pairing-mac', 'Delete');
+    await page.type('#pairing-mac', 'b');
+    await expect(page.locator('#pairing-mac')).toHaveValue('AA:BB:CC:DD:EE:FF');
+    // This fixture is a legacy device without MAC; clear after exercising the formatter.
+    await page.fill('#pairing-mac', '');
 
     // 4. Preencher código de ativação
     await page.fill('#pairing-code', code);
