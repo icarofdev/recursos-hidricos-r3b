@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Confirmar e-mail · Hidra R3B</title>
+    <link rel="stylesheet" href="/static/css/theme.css" />
+    <link rel="stylesheet" href="/static/css/auth.css" />
+    <script src="/static/js/theme.js" defer></script>
+    <script src="/static/js/config.js" defer></script>
+    <script src="/static/js/email-verification.js" defer></script>
+  </head>
+  <body>
+    <main class="auth-form-panel">
+      <section class="auth-card">
+        <h1>Confirme seu e-mail</h1>
+        <p>Entre na mesma conta que solicitou a confirmação para concluir.</p>
+        <p id="email-proof-feedback" role="status" aria-live="polite"></p>
+        <form id="verify-email-form" class="auth-form" hidden>
+          <button class="auth-submit" type="submit">Confirmar endereço</button>
+        </form>
+        <button id="request-email-verification" class="auth-submit" type="button" hidden>
+          Enviar nova confirmação
+        </button>
+        <a id="verification-login" href="/login">Entrar</a>
+        <p class="auth-switch"><a href="/">Voltar ao painel</a></p>
+      </section>
+    </main>
+  </body>
+</html>

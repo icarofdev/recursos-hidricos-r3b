@@ -25,6 +25,7 @@ const staticAssets = [
   'static/js/auth.js',
   'static/js/dashboard.js',
   'static/js/admin.js',
+  'static/js/email-verification.js',
   'static/js/vendor/chart.umd.min.js',
 ];
 for (const file of staticAssets) {
@@ -64,6 +65,7 @@ const htmlPages = [
   { src: 'web/reset-password.html', dest: 'dist/frontend/reset-password.html' },
   { src: 'web/reset-password.html', dest: 'dist/frontend/redefinir-senha.html' },
   { src: 'web/admin.html', dest: 'dist/frontend/admin.html' },
+  { src: 'web/verify-email.html', dest: 'dist/frontend/verify-email.html' },
 ];
 for (const { src, dest } of htmlPages) {
   let content = await readFile(src, 'utf8');

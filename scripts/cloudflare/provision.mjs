@@ -40,7 +40,11 @@ const sql = `INSERT INTO devices(id,device_code,source,external_id,pairing_code_
 VALUES (${id},${quoted(`HIDRA-R3B-${String(id).padStart(6, '0')}`)},${quoted(source)},${external ? quoted(external) : 'NULL'},${quoted(hash)},${time + 86400},${time},${time})
 ON CONFLICT(id) DO UPDATE SET pairing_code_hash=excluded.pairing_code_hash,pairing_expires_at=excluded.pairing_expires_at,updated_at=excluded.updated_at
 WHERE devices.owner_user_id IS NULL AND devices.source=excluded.source AND devices.external_id IS excluded.external_id
-RETURNING id;`;
+RETURNING id;
+UPDATE activation_codes SET revoked_at=${time} WHERE device_id=${id} AND used_at IS NULL AND revoked_at IS NULL
+AND EXISTS(SELECT 1 FROM devices WHERE id=${id} AND pairing_code_hash=${quoted(hash)});
+INSERT INTO activation_codes(device_id,code_hash,expires_at,created_at)
+SELECT id,${quoted(hash)},${time + 86400},${time} FROM devices WHERE id=${id} AND pairing_code_hash=${quoted(hash)} AND owner_user_id IS NULL;`;
 await mkdir('.runtime/cloudflare', { recursive: true });
 const file = resolve('.runtime/cloudflare', `provision-${randomBytes(8).toString('hex')}.sql`);
 await writeFile(file, sql, { mode: 0o600 });

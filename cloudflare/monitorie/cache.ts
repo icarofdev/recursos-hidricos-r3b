@@ -4,6 +4,8 @@ import { configInt, HttpError, isLocal, now } from '../http';
 import { sha256 } from '../auth/crypto';
 import { MonitorieAPI, type MonitorieAdapter, type TelemetryScope } from './adapter';
 import { MockMonitorie } from './mock';
+import { MonitorieAuth } from './auth';
+import { D1MonitorieGate, MonitorieReadClient } from './protocol';
 
 function adapter(c: Context, row: ReservoirRow): MonitorieAdapter {
   if (row.source === 'mock') {
@@ -11,7 +13,10 @@ function adapter(c: Context, row: ReservoirRow): MonitorieAdapter {
       throw new HttpError(503, 'MOCK_DISABLED', 'Dados de demonstração indisponíveis neste ambiente.');
     return new MockMonitorie();
   }
-  return new MonitorieAPI(c.env);
+  return new MonitorieAPI(
+    c.env,
+    new MonitorieReadClient(new MonitorieAuth(c.env), new D1MonitorieGate(c.env.DB, row.device_id)),
+  );
 }
 function scope(c: Context, row: ReservoirRow): TelemetryScope {
   return {
@@ -37,16 +42,19 @@ async function cached<T>(
       row.source,
       row.external_id,
       row.linked_at,
+      row.access_user_id,
+      row.access_generation,
+      row.ownership_generation,
       c.env.MONITORIE_MODE,
       operation,
     ]),
   );
-  return cachedTelemetry(c, id, producer);
+  return cachedTelemetry(c, id, producer, row);
 }
 
 export async function remoteSnapshot(c: Context, row: ReservoirRow): Promise<Snapshot> {
   const target = scope(c, row);
-  return cached(c, row, 'snapshot', async () => {
+  const result = await cached(c, row, 'snapshot', async () => {
     const result = await adapter(c, row).snapshot(target);
     if (
       !result ||
@@ -57,20 +65,31 @@ export async function remoteSnapshot(c: Context, row: ReservoirRow): Promise<Sna
       throw invalidData();
     if (result.data) {
       validateReading(result.data, row.device_id, row.device_type);
-      if (Date.parse(result.data.timestamp) < row.linked_at * 1000) {
-        // O primeiro titular pode ver o último estado conhecido, mesmo que o
-        // dispositivo esteja desligado ao parear. Em transferências, uma
-        // medição anterior ao novo vínculo permanece privada.
-        const earlierLink = await c.env.DB.prepare(
-          'SELECT 1 FROM reservoirs WHERE device_id=? AND id<>? LIMIT 1',
-        )
-          .bind(row.device_id, row.id)
-          .first();
-        if (earlierLink) result.data = null;
-      }
     }
+    const observed = result.device.last_seen ? Date.parse(result.device.last_seen) / 1000 : null;
+    const allowed = observed !== null && Math.round(observed * 1000) >= row.linked_at_ms;
+    await c.env.DB.prepare(
+      'UPDATE devices SET reported_status=?,last_seen=CASE WHEN ? IS NULL THEN last_seen ELSE MAX(COALESCE(last_seen,0),?) END,communication_checked_at=? WHERE id=? AND ownership_generation=? AND external_id IS ?',
+    )
+      .bind(
+        result.device.status === 'online' ? 'online' : 'offline',
+        allowed ? observed : null,
+        allowed ? observed : null,
+        now(),
+        row.device_id,
+        row.ownership_generation,
+        row.external_id,
+      )
+      .run();
     return result;
   });
+  // Also filter cache hits. Durable device generation survives account erasure.
+  if (result.data && Date.parse(result.data.timestamp) < Math.round(row.linked_at * 1000)) result.data = null;
+  if (result.device.last_seen && Date.parse(result.device.last_seen) < Math.round(row.linked_at * 1000)) {
+    result.device.last_seen = null;
+    result.device.status = 'unknown';
+  }
+  return result;
 }
 export async function remoteHistory(
   c: Context,
@@ -80,10 +99,11 @@ export async function remoteHistory(
 ): Promise<(Reading | SMWAReading)[]> {
   // Janela arredondada estabiliza chave; filtro final aplica o limite exato do pedido.
   const since = now() - hours * 3600;
+  const normalizedHours = [1, 6, 12, 24, 72, 168, 720].find((value) => value >= hours)!;
   const seconds = configInt(c.env.MONITORIE_CACHE_SECONDS, 60, 60, 3600);
-  const bucket = Math.floor(since / seconds) * seconds;
-  const data = await cached(c, row, `history:${hours}:${limit}:${bucket}`, async () => {
-    const records = await adapter(c, row).history(scope(c, row), Math.max(bucket, row.linked_at), limit);
+  const bucket = Math.floor((now() - normalizedHours * 3600) / seconds) * seconds;
+  const data = await cached(c, row, `history:${normalizedHours}:2000:${bucket}`, async () => {
+    const records = await adapter(c, row).history(scope(c, row), Math.max(bucket, row.linked_at), 2000);
     if (!Array.isArray(records) || records.length > 2000) throw invalidData();
     records.forEach((record) => validateReading(record, row.device_id, row.device_type));
     return records;
@@ -131,7 +151,18 @@ export function validateReading(
       ['volume', 0, 1e12],
       ['rssi_wifi', -200, 0],
     ] as const) {
-      if (typeof wu[field] !== 'number' || !Number.isFinite(wu[field]) || wu[field] < min || wu[field] > max)
+      if (
+        wu[field] === null &&
+        ['nivel', 'volume'].includes(field) &&
+        ['out_of_range', 'configuration_missing', 'missing'].includes(wu.measurement_quality ?? '')
+      )
+        continue;
+      if (
+        typeof wu[field] !== 'number' ||
+        !Number.isFinite(wu[field]) ||
+        wu[field]! < min ||
+        wu[field]! > max
+      )
         throw invalidData();
     }
   }

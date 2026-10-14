@@ -1,18 +1,20 @@
 import type { Context, ReservoirRow } from '../types';
 import { body, configInt, HttpError, isLocal, iso, json, method, now, positiveId, string } from '../http';
 import { csrf, requireUser } from '../auth/sessions';
-import { sha256 } from '../auth/crypto';
+import { randomToken, sha256 } from '../auth/crypto';
 import { clientIP, rateLimit } from '../auth/rate-limit';
 import { auditStatement } from '../admin/audit';
 import { normalizeMac } from '../admin/device-identity';
 import { guard } from '../admin/audit';
 import { validateConfiguration } from '../reservoir-volume';
+import { effectiveStatus } from '../device-status';
 
-const select = `SELECT r.*,d.device_code,d.mac_address,d.device_type,d.source,d.external_id,d.last_seen,d.reported_status,
+const select = `SELECT r.*,r.linked_at owner_linked_at,MAX(r.linked_at_ms,du.access_started_ms) access_linked_at_ms,d.ownership_generation,du.user_id access_user_id,du.access_generation,d.device_code,d.mac_address,d.device_type,d.source,d.external_id,d.last_seen,d.communication_checked_at,d.reported_status,
  CASE WHEN du.user_id=r.user_id THEN r.linked_at ELSE MAX(r.linked_at,du.linked_at) END access_linked_at,(SELECT COUNT(*) FROM device_users WHERE device_id=d.id) user_count
  FROM reservoirs r JOIN devices d ON d.id=r.device_id
  JOIN device_users du ON du.device_id=d.id
- WHERE du.user_id=? AND d.owner_user_id=r.user_id AND r.unlinked_at IS NULL`;
+ WHERE du.user_id=? AND d.owner_user_id=r.user_id AND r.unlinked_at IS NULL
+ AND (du.user_id=r.user_id OR EXISTS(SELECT 1 FROM users proof WHERE proof.id=du.user_id AND proof.email_verified_at IS NOT NULL))`;
 
 export async function owned(c: Context, id: number, manage = false): Promise<ReservoirRow> {
   const user = requireUser(c);
@@ -26,12 +28,16 @@ export async function owned(c: Context, id: number, manage = false): Promise<Res
       'OWNER_REQUIRED',
       'Somente o proprietário pode alterar este reservatório ou gerenciar usuários.',
     );
-  row.linked_at = row.access_linked_at;
+  row.linked_at = row.access_linked_at_ms / 1000;
   return row;
 }
 
 export function present(c: Context, row: ReservoirRow) {
   const threshold = configInt(c.env.DEVICE_OFFLINE_AFTER_SECONDS, 90, 5, 86400);
+  const visibleLastSeen =
+    row.last_seen !== null && Math.round(row.last_seen * 1000) < row.access_linked_at_ms
+      ? null
+      : row.last_seen;
   return {
     id: row.id,
     name: row.name,
@@ -42,7 +48,7 @@ export function present(c: Context, row: ReservoirRow) {
     can_manage: row.user_id === c.user?.id && !c.session?.read_only,
     user_count: row.user_count,
     user_limit: 5,
-    linked_at: iso(row.linked_at),
+    linked_at: iso(row.access_linked_at_ms / 1000),
     device: {
       id: row.device_id,
       code: row.mac_address ?? row.device_code,
@@ -50,13 +56,17 @@ export function present(c: Context, row: ReservoirRow) {
       request_interval_seconds: row.source === 'monitorie' ? 70 : 0,
       telemetry_linked: row.source !== 'monitorie' || row.external_id !== null,
       status:
-        (row.source !== 'monitorie' || row.external_id !== null) &&
-        row.reported_status === 'online' &&
-        row.last_seen !== null &&
-        row.last_seen + threshold > now()
-          ? 'online'
-          : 'offline',
-      last_seen: row.source === 'monitorie' && row.external_id === null ? null : iso(row.last_seen),
+        row.source === 'monitorie' && visibleLastSeen === null
+          ? 'unknown'
+          : effectiveStatus(
+              c.env,
+              row.source,
+              row.external_id,
+              row.reported_status,
+              visibleLastSeen,
+              row.communication_checked_at,
+            ),
+      last_seen: row.source === 'monitorie' && row.external_id === null ? null : iso(visibleLastSeen),
       offline_after_seconds: threshold,
     },
   };
@@ -99,16 +109,25 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
     const row = await owned(c, positiveId(data.reservoir_id), true);
     const target = add
       ? (
-          await c.env.DB.prepare('SELECT id FROM users WHERE email=?')
+          await c.env.DB.prepare('SELECT id FROM users WHERE email=? AND email_verified_at IS NOT NULL')
             .bind(string(data, 'email', 254).trim().toLowerCase())
             .first<{ id: number }>()
         )?.id
       : positiveId(data.user_id);
-    if (!target)
+    if (add && user.email_verified_at === null)
       throw new HttpError(
-        404,
-        'USER_NOT_FOUND',
-        'Conta não encontrada. A pessoa precisa se cadastrar antes do vínculo.',
+        403,
+        'EMAIL_VERIFICATION_REQUIRED',
+        'Confirme seu e-mail antes de compartilhar dispositivos.',
+      );
+    if (!target)
+      return json(
+        {
+          success: true,
+          message:
+            'Se a conta estiver apta, o vínculo estará disponível. A pessoa deve confirmar seu e-mail para receber novos acessos.',
+        },
+        202,
       );
     if (!add && target === row.user_id)
       throw new HttpError(
@@ -120,8 +139,8 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
       ownerGuard(c, row),
       add
         ? c.env.DB.prepare(
-            'INSERT INTO device_users(device_id,user_id,linked_at) VALUES (?,?,?) RETURNING user_id',
-          ).bind(row.device_id, target, now())
+            'INSERT INTO device_users(device_id,user_id,linked_at,access_generation,access_started_ms) SELECT ?,id,?,?,? FROM users WHERE id=? AND email_verified_at IS NOT NULL RETURNING user_id',
+          ).bind(row.device_id, now(), randomToken(16), Date.now(), target)
         : c.env.DB.prepare('DELETE FROM device_users WHERE device_id=? AND user_id=? RETURNING user_id').bind(
             row.device_id,
             target,
@@ -135,7 +154,16 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
       ),
     ]);
     if (!result[1].results.length) throw new HttpError(404, 'USER_LINK_NOT_FOUND', 'Vínculo não encontrado.');
-    return json({ success: true });
+    return json(
+      add
+        ? {
+            success: true,
+            message:
+              'Se a conta estiver apta, o vínculo estará disponível. A pessoa deve confirmar seu e-mail para receber novos acessos.',
+          }
+        : { success: true },
+      add ? 202 : 200,
+    );
   }
   if (path === '/api/reservoirs/configuration') {
     const data = await body(c, [
@@ -264,7 +292,8 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
     const hash = await sha256(code);
     if (!connect) {
       const device = await c.env.DB.prepare(
-        'SELECT device_code,mac_address,device_type,source,external_id,reported_status,last_seen FROM devices WHERE pairing_code_hash=? AND owner_user_id IS NULL AND pairing_expires_at>? AND (mac_address=? OR (mac_address IS NULL AND ? IS NULL))',
+        `SELECT device_code,mac_address,device_type,source,external_id,reported_status,last_seen,communication_checked_at FROM devices WHERE pairing_code_hash=? AND owner_user_id IS NULL AND pairing_expires_at>? AND (mac_address=? OR (mac_address IS NULL AND ? IS NULL))
+         AND EXISTS(SELECT 1 FROM activation_codes ac WHERE ac.device_id=devices.id AND ac.code_hash=devices.pairing_code_hash AND ac.used_at IS NULL AND ac.revoked_at IS NULL AND ac.expires_at>unixepoch())`,
       )
         .bind(hash, now(), mac, mac)
         .first<{
@@ -275,6 +304,7 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
           external_id: string | null;
           reported_status: string;
           last_seen: number | null;
+          communication_checked_at: number | null;
         }>();
       if (!device) throw pairingError();
       const threshold = configInt(c.env.DEVICE_OFFLINE_AFTER_SECONDS, 90, 5, 86400);
@@ -284,13 +314,14 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
           device_code: device.mac_address ?? device.device_code,
           device_type: device.device_type,
           telemetry_linked: device.source !== 'monitorie' || device.external_id !== null,
-          status:
-            (device.source !== 'monitorie' || device.external_id !== null) &&
-            device.last_seen &&
-            device.reported_status === 'online' &&
-            device.last_seen + threshold > now()
-              ? 'online'
-              : 'offline',
+          status: effectiveStatus(
+            c.env,
+            device.source,
+            device.external_id,
+            device.reported_status,
+            device.last_seen,
+            device.communication_checked_at,
+          ),
           last_seen:
             device.source === 'monitorie' && device.external_id === null ? null : iso(device.last_seen),
         },
@@ -300,11 +331,12 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
     const time = now();
     // INSERT SELECT + índice único + trigger impedem dois proprietários simultâneos.
     const result = await c.env.DB.prepare(
-      `INSERT INTO reservoirs(user_id,device_id,name,linked_at,created_at,updated_at)
-   SELECT ?,id,?,?,?,? FROM devices WHERE pairing_code_hash=? AND owner_user_id IS NULL AND pairing_expires_at>? AND (mac_address=? OR (mac_address IS NULL AND ? IS NULL))
+      `INSERT INTO reservoirs(user_id,device_id,name,linked_at,created_at,updated_at,linked_at_ms)
+   SELECT ?,id,?,?,?,?,? FROM devices WHERE pairing_code_hash=? AND owner_user_id IS NULL AND pairing_expires_at>? AND (mac_address=? OR (mac_address IS NULL AND ? IS NULL))
+   AND EXISTS(SELECT 1 FROM activation_codes ac WHERE ac.device_id=devices.id AND ac.code_hash=devices.pairing_code_hash AND ac.used_at IS NULL AND ac.revoked_at IS NULL AND ac.expires_at>unixepoch())
    RETURNING id, device_id`,
     )
-      .bind(user.id, name, time, time, time, hash, time, mac, mac)
+      .bind(user.id, name, time, time, time, Date.now(), hash, time, mac, mac)
       .first<{ id: number; device_id: number }>();
     if (!result) throw pairingError();
 
@@ -332,4 +364,13 @@ function pairingError() {
     'INVALID_PAIRING_CODE',
     'MAC ou código de ativação inválido, expirado ou já utilizado.',
   );
+}
+/** Check again after asynchronous integration work, including hits on stored cache. */
+export async function assertCurrentAccess(c: Context, row: ReservoirRow): Promise<void> {
+  const current = await owned(c, row.id);
+  if (
+    current.access_generation !== row.access_generation ||
+    current.ownership_generation !== row.ownership_generation
+  )
+    throw new HttpError(404, 'RESERVOIR_NOT_FOUND', 'Reservatório não encontrado.');
 }

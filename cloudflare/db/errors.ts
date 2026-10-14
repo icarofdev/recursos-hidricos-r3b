@@ -1,6 +1,12 @@
 import { HttpError } from '../http';
 export function domainError(error: unknown): never {
   const message = error instanceof Error ? error.message : '';
+  if (message.includes('EMAIL_VERIFICATION_REQUIRED'))
+    throw new HttpError(
+      403,
+      'EMAIL_VERIFICATION_REQUIRED',
+      'Confirme o e-mail antes de conceder acesso administrativo.',
+    );
   if (message.includes('DEVICE_USER_LIMIT'))
     throw new HttpError(
       409,

@@ -2,6 +2,9 @@
 
 Este guia descreve a configuração real do backend no Cloudflare Worker, dos bancos D1 separados e do frontend estático na Vercel. PHP, VPS e MQTT legado não participam deste deploy.
 
+Para schema 13, siga também [a ordem de publicação e recuperação](OPERATIONS.md).
+Antes de migrations remotas, faça backup e suspenda tráfego conforme esse procedimento.
+
 ## 1. Princípios de segurança
 
 - Trabalhe em `codex/production-hardening` e valide primeiro um Preview Deployment.
@@ -54,6 +57,9 @@ As migrations versionadas são:
 - `0008_admin_totp.sql`: autenticadores individuais e desafios TOTP para admins.
 - `0009_security_events.sql`: eventos de autenticação e ações administrativas, com retenção limitada pela manutenção.
 - `0010_endpoint_requests.sql`: contadores de requisições por endpoint em janelas de cinco minutos, sem IP bruto.
+- `0011_device_memberships_geometry.sql`: membros por dispositivo e configuração geométrica.
+- `0012_security_boundaries.sql`: prova de e-mail, sessões, gerações de acesso/titularidade, códigos e cache.
+- `0013_telemetry_quality.sql`: qualidade da medição, volume/nível nulos quando inválidos e versão 13 do schema.
 
 Depois, consulte `sqlite_master` e o estado de migrations pelos comandos oficiais do Wrangler para confirmar tabelas, índices e triggers. Não altere o schema manualmente.
 
@@ -86,23 +92,25 @@ As configurações não secretas ficam em `[vars]` e `[env.preview.vars]` no `wr
 | `CORS_ORIGINS`                 | mesma origem exata de Production    | mesma origem exata de Preview    |
 | `READINGS_RETENTION_DAYS`      | `90`                                | `90`                             |
 | `AUDIT_RETENTION_DAYS`         | `180`                               | `180`                            |
-| `RETENTION_BATCH_SIZE`         | `500`                               | `500`                            |
+| `RETENTION_BATCH_SIZE`         | `2000`                              | `2000`                           |
+| `RETENTION_MAX_BATCHES`        | `2`                                 | `2`                              |
 | `MONITORIE_CACHE_SECONDS`      | `300`                               | `300`                            |
 | `DEVICE_OFFLINE_AFTER_SECONDS` | `90`                                | `90`                             |
 | `MONITORIE_MODE`               | `live`                              | `live`                           |
 | `MONITORIE_SMWU_MAPPING`       | JSON mapeando chaves SM-WU          | JSON mapeando chaves SM-WU       |
 | `MONITORIE_SMWA_MAPPING`       | JSON mapeando chaves SM-WA          | JSON mapeando chaves SM-WA       |
 | `MAIL_MODE`                    | `disabled` até configurar Resend    | `disabled`                       |
+| `MAIL_REQUIRED`                | `true`                              | `false`                          |
 | `INGEST_ENABLED`               | `false`                             | `false`                          |
 
-`/api/ready` só retorna pronto quando as origens, os dois secrets de autenticação e o D1 estiverem utilizáveis. A aplicação falha fechada se `SESSION_SECRET` ou `PASSWORD_PEPPER` estiver ausente/inválido.
+`/api/ready` verifica origens, secrets, formato da chave TOTP, schema 13 e configurações das funcionalidades obrigatórias. Não consulta provedores externos. Com `MAIL_REQUIRED=true` e `MAIL_MODE=disabled`, retorna 503 até o operador configurar recuperação e confirmação. `/api/health` é somente liveness.
 
 ### Integrações opcionais
 
 - Resend: configure `RESEND_API_KEY` como secret do Worker e `EMAIL_FROM` como variável não secreta no formato `Hidra R3B <contato@dominio-verificado>` (ou apenas o endereço). No painel da Resend, adicione o domínio em **Domains**, publique os registros DNS indicados para SPF e DKIM, aguarde o status **Verified** e crie uma API key com permissão de envio em **API Keys**. Configure `MAIL_MODE=resend` somente após isso. O Worker usa a API HTTP oficial da Resend para a recuperação de senha; o token não aparece em logs. A resposta de recuperação continua genérica, e a falha de envio invalida o token no D1. O teste automatizado simula a Resend e não verifica entrega real.
-- Sem domínio verificado, `onboarding@resend.dev` serve apenas para testes destinados ao e-mail proprietário da conta Resend. Não habilite esse remetente no fluxo de recuperação para usuários reais; a Resend rejeita outros destinatários. O conector da Resend não permite recuperar o valor de uma API key já criada, então a chave do Worker deve ser adicionada pelo usuário diretamente ao secret ou ao `.dev.vars` local, sem passar pelo chat.
+- Sem domínio verificado, use apenas o remetente de teste autorizado que aparece no painel do provedor, respeitando as restrições de destinatário. Endereços `example.test` desta documentação são fictícios e não recebem nem enviam mensagens reais. A chave do Worker deve ser adicionada diretamente ao secret privado, sem passar pelo chat.
 
-Para testar pelo Worker local, preencha `RESEND_API_KEY` diretamente no `.dev.vars` ignorado pelo Git, mantenha `EMAIL_FROM=onboarding@resend.dev` e altere temporariamente `MAIL_MODE=resend`. `npm run dev` lê essas três configurações e permite o link de recuperação em `http://127.0.0.1:8788` somente em desenvolvimento. Use apenas uma conta cujo e-mail seja o endereço proprietário da conta Resend; depois volte `MAIL_MODE=disabled`. O envio do conector Resend não valida, por si só, o envio pelo Worker.
+Os testes automatizados interceptam Resend e não enviam mensagens. Um ensaio real posterior exige autorização, chave privada, remetente autorizado e conta do operador. Configure-os fora de Git; use links locais somente em desenvolvimento. O envio pelo conector não comprova o funcionamento do Worker.
 
 - Monitor IE: configure `MONITORIE_USERNAME` e `MONITORIE_PASSWORD` somente como secrets do Worker. O backend faz login e refresh, mantendo o par de tokens cifrado no D1 pela chave derivada de `SESSION_SECRET`; `MONITORIE_JWT` permanece apenas como alternativa manual se ambas as credenciais estiverem ausentes. O backend percorre a lista e consulta a chave de telemetria `mac` de cada dispositivo para confirmar uma correspondência exata, única e do mesmo modelo antes de vincular a leitura. Configure `MONITORIE_SMWU_MAPPING`/`MONITORIE_SMWA_MAPPING` somente com nomes e unidades confirmados e preserve `MONITORIE_MODE=unconfigured` até a validação; veja `docs/MONITORIE.md`.
 - Ingestão local: não existe secret global `DEVICE_TOKENS` no Worker atual. Tokens são provisionados/rotacionados pelo fluxo administrativo, exibidos uma vez e persistidos somente como hash em `device_credentials`. Habilite `INGEST_ENABLED` apenas para dispositivo `source='local'` real e validado.
@@ -155,7 +163,7 @@ O cron atual roda a cada 10 minutos (`*/10 * * * *`) e chama a manutenção em l
 Cadastre o usuário normalmente no ambiente remoto antes da promoção. Depois execute a CLI oficial:
 
 ```sh
-node scripts/cloudflare/admin.mjs set-admin icarofranklin0@gmail.com --remote
+node scripts/cloudflare/admin.mjs set-admin operador@example.test --remote
 ```
 
 Confirme no D1 remoto `users.role='admin'` e o evento `audit_logs.action='admin_promoted'`; teste `/admin` com um usuário comum e com o administrador. Não hardcode conta, senha ou papel no código.

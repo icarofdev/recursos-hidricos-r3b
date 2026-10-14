@@ -12,6 +12,7 @@ import {
   recoveryHash,
   requireTotpKey,
   verifyTotp,
+  totpNeedsUpgrade,
 } from './totp';
 
 type Stage = 'setup' | 'verify' | 'recovery_setup';
@@ -163,6 +164,7 @@ async function totpRouteInner(
       .first<Credential>();
     if (!credential) throw invalid();
     const secret = await decryptTotp(c.env, user.id, credential.secret_encrypted);
+    await upgradeTotp(c, user.id, credential.secret_encrypted, secret);
     const step = await verifyTotp(secret, code, credential.last_used_step);
     if (step === null) throw invalidCode();
     const updated = await c.env.DB.prepare(
@@ -234,7 +236,7 @@ async function totpRouteInner(
       c.env.DB.prepare(
         `INSERT INTO admin_totp(user_id,secret_encrypted,last_used_step,created_at) VALUES (?,?,?,?)
         ON CONFLICT(user_id) DO UPDATE SET secret_encrypted=excluded.secret_encrypted,last_used_step=excluded.last_used_step,created_at=excluded.created_at`,
-      ).bind(user.id, row.pending_secret_encrypted, step, time),
+      ).bind(user.id, await encryptTotp(c.env, user.id, secret), step, time),
       c.env.DB.prepare('DELETE FROM admin_totp_recovery WHERE user_id=?').bind(user.id),
       c.env.DB.prepare('DELETE FROM sessions WHERE user_id=?').bind(user.id),
     ];
@@ -285,6 +287,7 @@ async function totpRouteInner(
     });
   }
   const secret = await decryptTotp(c.env, user.id, credential.secret_encrypted);
+  await upgradeTotp(c, user.id, credential.secret_encrypted, secret);
   const step = await verifyTotp(secret, code, credential.last_used_step);
   if (step === null) return failure(c, row);
   const updated = await c.env.DB.prepare(
@@ -300,4 +303,10 @@ async function totpRouteInner(
     .first();
   if (!consumed) throw invalid();
   return complete(c, row, user);
+}
+async function upgradeTotp(c: Context, id: number, stored: string, plaintext: string): Promise<void> {
+  if (totpNeedsUpgrade(c.env, stored))
+    await c.env.DB.prepare('UPDATE admin_totp SET secret_encrypted=? WHERE user_id=? AND secret_encrypted=?')
+      .bind(await encryptTotp(c.env, id, plaintext), id, stored)
+      .run();
 }

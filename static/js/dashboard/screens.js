@@ -160,7 +160,9 @@ export function renderScreens() {
           ? 'Telemetria não vinculada'
           : device.status === 'online'
             ? 'Online'
-            : 'Sem comunicação';
+            : device.status === 'unknown'
+              ? 'Comunicação não confirmada'
+              : 'Sem comunicação';
         return `<div class="directory-row"><span class="directory-symbol" aria-hidden="true"><svg><use href="#icon-device"></use></svg></span><div><strong>${escapeHTML(reservoir.name)}</strong><small><span class="technical-value">${escapeHTML(reservoir.device.code)}</span> · ${escapeHTML(reservoir.device.type)}</small></div><span class="status-badge ${device.status === 'online' ? 'is-normal' : 'is-warning'}">${status}</span><span class="directory-contact">${escapeHTML(formatElapsed(device.last_seen))}</span><button class="text-button" data-select-reservoir="${reservoir.id}" type="button">Abrir<span class="sr-only"> ${escapeHTML(reservoir.name)}</span></button></div>`;
       })
       .join('') || '<p>Nenhum dispositivo cadastrado.</p>';
@@ -298,13 +300,14 @@ async function memberMutation(path, body) {
   const button = getElement('member-form').querySelector('button');
   button.disabled = true;
   try {
-    await services.requestJSON(path, {
+    const result = await services.requestJSON(path, {
       method: 'POST',
       body: { reservoir_id: dashboardState.selectedReservoirId, ...body },
     });
     getElement('member-email').value = '';
     await loadMembers();
     await services.refresh();
+    if (result.message) getElement('members-feedback').textContent = result.message;
   } catch (error) {
     getElement('members-feedback').textContent = error.message;
   } finally {

@@ -18,6 +18,11 @@
     <script defer src="/static/js/admin.js"></script>
   </head>
   <body>
+    <aside id="email-proof-banner" hidden>
+      <p>Confirme seu e-mail para conceder ou receber novos acessos.</p>
+      <button id="request-email-verification" type="button">Enviar confirmação</button>
+      <p id="email-proof-feedback" role="status" aria-live="polite"></p>
+    </aside>
     <div class="admin-shell">
       <header class="admin-topbar">
         <div class="admin-brand">
@@ -283,5 +288,6 @@
         </div>
       </section>
     </div>
+    <script src="/static/js/email-verification.js" defer></script>
   </body>
 </html>

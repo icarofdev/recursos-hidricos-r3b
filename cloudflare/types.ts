@@ -7,10 +7,19 @@ export interface Env {
   APP_URL?: string;
   SESSION_SECRET?: string;
   PASSWORD_PEPPER?: string;
+  PASSWORD_PEPPER_ID?: string;
+  PASSWORD_PEPPER_PREVIOUS?: string;
+  PASSWORD_PEPPER_PREVIOUS_ID?: string;
+  PASSWORD_PEPPER_PREVIOUS_UNTIL?: string;
   RESEND_API_KEY?: string;
   EMAIL_FROM?: string;
   MAIL_MODE?: string;
+  MAIL_REQUIRED?: string;
   TOTP_ENCRYPTION_KEY?: string;
+  TOTP_KEY_ID?: string;
+  TOTP_ENCRYPTION_KEY_PREVIOUS?: string;
+  TOTP_KEY_PREVIOUS_ID?: string;
+  TOTP_KEY_PREVIOUS_UNTIL?: string;
   MONITORIE_MODE?: string;
   MONITORIE_JWT?: string;
   MONITORIE_USERNAME?: string;
@@ -24,6 +33,10 @@ export interface Env {
   READINGS_RETENTION_DAYS?: string;
   AUDIT_RETENTION_DAYS?: string;
   RETENTION_BATCH_SIZE?: string;
+  RETENTION_MAX_BATCHES?: string;
+  HISTORY_MAX_SAMPLES?: string;
+  OBSERVABILITY_SAMPLE_RATE?: string;
+  SECURITY_EVENT_FAILURE_SAMPLE_RATE?: string;
   INGEST_DEVICE_LIMIT?: string;
   METRICS?: AnalyticsEngineDataset;
   DASHBOARD_SHARE_USERNAME?: string;
@@ -38,12 +51,16 @@ export interface User {
   session_version: number;
   password_hash: string;
   role: 'admin' | 'user';
+  email_verified_at: number | null;
 }
 
 export interface Session {
   token_hash: string;
   previous_hash: string | null;
   previous_until: number | null;
+  pending_hash: string | null;
+  pending_until: number | null;
+  share_version: string | null;
   user_id: number | null;
   session_version: number;
   csrf_token: string;
@@ -79,20 +96,29 @@ export interface ReservoirRow {
   geometry: string;
   measurement_config: string | null;
   access_linked_at: number;
+  access_linked_at_ms: number;
+  linked_at_ms: number;
+  owner_linked_at: number;
+  access_user_id: number;
+  access_generation: string;
+  ownership_generation: number;
   user_count: number;
   linked_at: number;
+  updated_at: number;
   source: 'monitorie' | 'local' | 'mock';
   external_id: string | null;
   mac_address: string | null;
   last_seen: number | null;
   reported_status: 'online' | 'offline';
+  communication_checked_at: number | null;
 }
 
 export interface Reading {
   id: number;
   distancia: number;
-  nivel: number;
-  volume: number;
+  nivel: number | null;
+  volume: number | null;
+  measurement_quality?: string;
   rssi_wifi: number;
   timestamp: string;
 }
@@ -110,10 +136,15 @@ export interface DeviceStatus {
   id: number;
   code?: string;
   type: DeviceType;
-  status: 'online' | 'offline';
+  status: 'online' | 'offline' | 'unknown';
   last_seen: string | null;
   offline_after_seconds: number;
   telemetry_linked?: boolean;
+  communication_checked_at?: string | null;
+  cache_fetched_at?: string | null;
+  cache_age_seconds?: number;
+  data_stale?: boolean;
+  integration_status?: 'ok' | 'busy' | 'unavailable';
 }
 
 export interface Snapshot {

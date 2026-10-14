@@ -5,6 +5,7 @@ import { clientIP, rateLimit } from '../auth/rate-limit';
 import { securityEvent } from '../auth/security-events';
 import { randomToken, sha256 } from '../auth/crypto';
 import { deviceMutation } from './mutations';
+import { effectiveStatus } from '../device-status';
 
 interface AdminDeviceRow {
   id: number;
@@ -21,6 +22,7 @@ interface AdminDeviceRow {
   linked_at: number | null;
   reported_status: string;
   last_seen: number | null;
+  communication_checked_at: number | null;
   created_at: number;
   updated_at: number;
   has_active_code: number;
@@ -37,13 +39,13 @@ export async function adminRoute(c: Context, path: string): Promise<Response> {
    SELECT d.id, d.device_code, d.mac_address, d.device_type, d.source, d.external_id,
           d.owner_user_id, u.name as owner_name, u.email as owner_email,
           r.id as reservoir_id, r.name as reservoir_name, r.linked_at,
-          d.reported_status, d.last_seen, d.created_at, d.updated_at,
+          d.reported_status, d.last_seen, d.communication_checked_at,d.created_at, d.updated_at,
           CASE WHEN ac.id IS NOT NULL THEN 1 ELSE 0 END as has_active_code,
           ac.expires_at as code_expires_at
    FROM devices d
    LEFT JOIN users u ON u.id = d.owner_user_id
    LEFT JOIN reservoirs r ON r.device_id = d.id AND r.unlinked_at IS NULL
-   LEFT JOIN activation_codes ac ON ac.device_id = d.id AND ac.used_at IS NULL AND ac.revoked_at IS NULL AND ac.expires_at > ?
+   LEFT JOIN activation_codes ac ON ac.device_id = d.id AND ac.code_hash=d.pairing_code_hash AND d.owner_user_id IS NULL AND ac.used_at IS NULL AND ac.revoked_at IS NULL AND ac.expires_at > ?
    GROUP BY d.id
    ORDER BY d.created_at DESC, d.id DESC
   `;
@@ -58,7 +60,14 @@ export async function adminRoute(c: Context, path: string): Promise<Response> {
         device_type: row.device_type,
         source: row.source,
         external_id: row.external_id,
-        status: row.reported_status,
+        status: effectiveStatus(
+          c.env,
+          row.source,
+          row.external_id,
+          row.reported_status,
+          row.last_seen,
+          row.communication_checked_at,
+        ),
         last_seen: iso(row.last_seen),
         created_at: iso(row.created_at),
         owner: row.owner_user_id
@@ -151,7 +160,7 @@ export async function adminRoute(c: Context, path: string): Promise<Response> {
         action: row.action,
         device: row.device_id ? { id: row.device_id, code: row.device_code, type: row.device_type } : null,
         author: row.user_id ? { id: row.user_id, name: row.user_name, email: row.user_email } : null,
-        details: row.details ? JSON.parse(row.details) : null,
+        details: parseAuditDetails(row.details),
         ip: row.ip,
         created_at: iso(row.created_at),
       })),
@@ -159,4 +168,12 @@ export async function adminRoute(c: Context, path: string): Promise<Response> {
   }
 
   throw new HttpError(404, 'NOT_FOUND', 'Recurso não encontrado.');
+}
+function parseAuditDetails(value: string | null): unknown {
+  if (!value) return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return { unavailable: true };
+  }
 }

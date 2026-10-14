@@ -1,6 +1,6 @@
 import type { Context, Session, User } from '../types';
-import { equal, randomToken, sha256 } from './crypto';
-import { HttpError, isCrossSite, isLocal, now, sameOrigin } from '../http';
+import { equal, hmac, randomToken, sha256 } from './crypto';
+import { HttpError, isCrossSite, isLocal, now, sameOrigin, secret } from '../http';
 import { clientIP, rateLimit } from './rate-limit';
 
 function cookieName(c: Context): string {
@@ -26,11 +26,16 @@ export async function loadSession(c: Context): Promise<void> {
   const hash = await sha256(token);
   const time = now();
   const session = await c.env.DB.prepare(
-    'SELECT * FROM sessions WHERE token_hash=? OR (previous_hash=? AND previous_until>?) LIMIT 1',
+    'SELECT * FROM sessions WHERE token_hash=? OR (previous_hash=? AND previous_until>?) OR (pending_hash=? AND pending_until>?) LIMIT 1',
   )
-    .bind(hash, hash, time)
+    .bind(hash, hash, time, hash, time)
     .first<Session>();
   if (!session) {
+    setCookie(c, '', 0);
+    return;
+  }
+  if (session.read_only && (!session.share_version || session.share_version !== (await sharingVersion(c)))) {
+    await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=?').bind(session.token_hash).run();
     setCookie(c, '', 0);
     return;
   }
@@ -43,7 +48,7 @@ export async function loadSession(c: Context): Promise<void> {
   let user: User | null = null;
   if (session.user_id !== null) {
     user = await c.env.DB.prepare(
-      'SELECT id,name,email,password_hash,session_version,role FROM users WHERE id=?',
+      'SELECT id,name,email,password_hash,session_version,role,email_verified_at FROM users WHERE id=?',
     )
       .bind(session.user_id)
       .first<User>();
@@ -55,19 +60,58 @@ export async function loadSession(c: Context): Promise<void> {
   }
   c.session = session;
   c.user = user;
-  if (session.rotated_at + 900 <= time && hash === session.token_hash) {
+  // Promote only after the client proves it received the candidate cookie. A lost
+  // response cannot invalidate the browser's current cookie before the next poll.
+  if (hash === session.pending_hash) {
+    const old = session.token_hash;
+    const promoted = await c.env.DB.batch([
+      c.env.DB.prepare(
+        'UPDATE sessions SET previous_hash=token_hash,previous_until=?,token_hash=?,pending_hash=NULL,pending_until=NULL,rotated_at=?,last_seen=? WHERE token_hash=? AND pending_hash=? AND pending_until>? RETURNING token_hash',
+      ).bind(time + 30, hash, time, time, old, hash, time),
+      c.env.DB.prepare(
+        'UPDATE admin_totp_challenges SET session_hash=? WHERE session_hash=? AND EXISTS(SELECT 1 FROM sessions WHERE token_hash=?)',
+      ).bind(hash, old, hash),
+    ]);
+    if (promoted[0].results.length) {
+      Object.assign(session, {
+        token_hash: hash,
+        previous_hash: old,
+        previous_until: time + 30,
+        pending_hash: null,
+        pending_until: null,
+        rotated_at: time,
+        last_seen: time,
+      });
+    } else {
+      const current = await c.env.DB.prepare('SELECT * FROM sessions WHERE token_hash=?')
+        .bind(hash)
+        .first<Session>();
+      if (!current) {
+        c.session = null;
+        c.user = null;
+        setCookie(c, '', 0);
+        return;
+      }
+      Object.assign(session, current);
+    }
+  }
+  if (
+    session.rotated_at + 900 <= time &&
+    hash === session.token_hash &&
+    (session.pending_until ?? 0) <= time
+  ) {
     const next = randomToken();
     const nextHash = await sha256(next);
     const result = await c.env.DB.prepare(
-      `UPDATE sessions SET previous_hash=token_hash, previous_until=?, token_hash=?, rotated_at=?, last_seen=? WHERE token_hash=?`,
+      `UPDATE sessions SET pending_hash=?,pending_until=?,last_seen=? WHERE token_hash=? AND COALESCE(pending_until,0)<=?`,
     )
-      .bind(time + 30, nextHash, time, time, hash)
+      .bind(nextHash, time + 120, time, hash, time)
       .run();
-    // Requisições concorrentes usam a sessão anterior por 30s; só a vencedora muda o cookie.
+    // Only the winner issues the candidate. The previous-token grace remains 30s after acknowledgement.
     if (result.meta.changes === 1) {
-      session.token_hash = nextHash;
+      session.pending_hash = nextHash;
+      session.pending_until = time + 120;
       session.last_seen = time;
-      session.rotated_at = time;
       setCookie(c, next, session.remember ? session.expires_at - time : undefined);
     }
   } else if (session.last_seen + 60 <= time) {
@@ -89,6 +133,9 @@ export async function newSession(
     token_hash: await sha256(token),
     previous_hash: null,
     previous_until: null,
+    pending_hash: null,
+    pending_until: null,
+    share_version: readOnly ? await sharingVersion(c) : null,
     user_id: user?.id ?? null,
     session_version: user?.session_version ?? 1,
     csrf_token: randomToken(),
@@ -103,15 +150,16 @@ export async function newSession(
   const statements = [];
   if (c.session)
     statements.push(
-      c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=? OR previous_hash=?').bind(
+      c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=? OR previous_hash=? OR pending_hash=?').bind(
+        c.session.token_hash,
         c.session.token_hash,
         c.session.token_hash,
       ),
     );
   statements.push(
     c.env.DB.prepare(
-      `INSERT INTO sessions(token_hash,user_id,session_version,csrf_token,remember,read_only,admin_mfa_at,created_at,last_seen,rotated_at,expires_at)
- VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO sessions(token_hash,user_id,session_version,csrf_token,remember,read_only,admin_mfa_at,created_at,last_seen,rotated_at,expires_at,share_version)
+ VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).bind(
       session.token_hash,
       session.user_id,
@@ -124,6 +172,7 @@ export async function newSession(
       time,
       time,
       session.expires_at,
+      session.share_version,
     ),
   );
   await c.env.DB.batch(statements);
@@ -157,9 +206,9 @@ export function requireRecentAdmin(c: Context): User {
     );
   return user;
 }
-export function csrf(c: Context): void {
+export function csrf(c: Context, allowReadOnlyLogout = false): void {
   sameOrigin(c);
-  if (c.session?.read_only)
+  if (c.session?.read_only && !allowReadOnlyLogout)
     throw new HttpError(403, 'READ_ONLY_SESSION', 'Este acesso compartilhado permite apenas visualização.');
   const value = c.request.headers.get('X-CSRF-Token') ?? '';
   if (!c.session || !value || !equal(value, c.session.csrf_token))
@@ -167,8 +216,8 @@ export function csrf(c: Context): void {
 }
 export async function logout(c: Context): Promise<void> {
   if (c.session)
-    await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=? OR previous_hash=?')
-      .bind(c.session.token_hash, c.session.token_hash)
+    await c.env.DB.prepare('DELETE FROM sessions WHERE token_hash=? OR previous_hash=? OR pending_hash=?')
+      .bind(c.session.token_hash, c.session.token_hash, c.session.token_hash)
       .run();
   c.session = null;
   c.user = null;
@@ -179,4 +228,14 @@ export const publicUser = (user: User) => ({
   name: user.name,
   email: user.email,
   role: user.role,
+  email_verified: user.email_verified_at !== null,
 });
+export async function sharingVersion(c: Context): Promise<string | null> {
+  const values = [
+    c.env.DASHBOARD_SHARE_USERNAME,
+    c.env.DASHBOARD_SHARE_PASSWORD,
+    c.env.DASHBOARD_SHARE_USER_EMAIL,
+  ];
+  if (values.some((value) => !value)) return null;
+  return hmac(`share-v1\0${JSON.stringify(values)}`, secret(c.env, 'SESSION_SECRET'));
+}

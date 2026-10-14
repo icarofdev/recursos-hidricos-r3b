@@ -1,6 +1,7 @@
 import type { Env } from '../types';
 import { HttpError } from '../http';
 import { equal, randomToken, sha256 } from './crypto';
+import { keyId, previousKeyActive } from './key-window';
 
 const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const bytes = (value: string) =>
@@ -11,8 +12,8 @@ const base64 = (value: Uint8Array) =>
     .replace(/\//g, '_')
     .replace(/=+$/, '');
 
-async function encryptionKey(env: Env): Promise<CryptoKey> {
-  const configured = (env.TOTP_ENCRYPTION_KEY ?? '').trim();
+async function encryptionKey(env: Env, previous = false): Promise<CryptoKey> {
+  const configured = ((previous ? env.TOTP_ENCRYPTION_KEY_PREVIOUS : env.TOTP_ENCRYPTION_KEY) ?? '').trim();
   const encoded =
     (configured.startsWith('"') && configured.endsWith('"')) ||
     (configured.startsWith("'") && configured.endsWith("'"))
@@ -31,6 +32,7 @@ async function encryptionKey(env: Env): Promise<CryptoKey> {
   return crypto.subtle.importKey('raw', raw, 'AES-GCM', false, ['encrypt', 'decrypt']);
 }
 export async function requireTotpKey(env: Env): Promise<void> {
+  keyId(env.TOTP_KEY_ID);
   await encryptionKey(env);
 }
 
@@ -56,21 +58,48 @@ export async function encryptTotp(env: Env, userId: number, secret: string): Pro
     await encryptionKey(env),
     new TextEncoder().encode(secret),
   );
-  return `v1.${base64(iv)}.${base64(new Uint8Array(ciphertext))}`;
+  return `v2.${keyId(env.TOTP_KEY_ID)}.${base64(iv)}.${base64(new Uint8Array(ciphertext))}`;
 }
 export async function decryptTotp(env: Env, userId: number, stored: string): Promise<string> {
   try {
-    const [version, iv, value] = stored.split('.');
-    if (version !== 'v1' || !iv || !value) throw new Error('ciphertext');
-    const plaintext = await crypto.subtle.decrypt(
-      { name: 'AES-GCM', iv: bytes(iv), additionalData: new TextEncoder().encode(`admin-totp:${userId}`) },
-      await encryptionKey(env),
-      bytes(value),
-    );
-    return new TextDecoder().decode(plaintext);
+    const parts = stored.split('.'),
+      version = parts[0],
+      id = version === 'v2' ? parts[1] : null;
+    const iv = parts[version === 'v2' ? 2 : 1],
+      value = parts[version === 'v2' ? 3 : 2];
+    if (!['v1', 'v2'].includes(version) || !iv || !value || parts.length !== (version === 'v2' ? 4 : 3))
+      throw new Error('ciphertext');
+    const allowedPrevious =
+      !!env.TOTP_ENCRYPTION_KEY_PREVIOUS && previousKeyActive(env.TOTP_KEY_PREVIOUS_UNTIL);
+    const decrypt = async (previous: boolean) =>
+      new TextDecoder().decode(
+        await crypto.subtle.decrypt(
+          {
+            name: 'AES-GCM',
+            iv: bytes(iv),
+            additionalData: new TextEncoder().encode(`admin-totp:${userId}`),
+          },
+          await encryptionKey(env, previous),
+          bytes(value),
+        ),
+      );
+    if (id !== null) {
+      if (id === keyId(env.TOTP_KEY_ID)) return await decrypt(false);
+      if (id === env.TOTP_KEY_PREVIOUS_ID && allowedPrevious) return await decrypt(true);
+      throw new Error('unknown key');
+    }
+    try {
+      return await decrypt(false);
+    } catch {
+      if (allowedPrevious) return await decrypt(true);
+      throw new Error('legacy key');
+    }
   } catch {
     throw new HttpError(503, 'TOTP_UNAVAILABLE', 'Autenticador temporariamente indisponível.');
   }
+}
+export function totpNeedsUpgrade(env: Env, stored: string): boolean {
+  return !stored.startsWith(`v2.${keyId(env.TOTP_KEY_ID)}.`);
 }
 function decodeSecret(secret: string): Uint8Array {
   let bits = 0,

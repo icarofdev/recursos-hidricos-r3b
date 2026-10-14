@@ -262,6 +262,7 @@ function getDeviceLastSeen() {
 }
 
 function isDeviceDisconnected() {
+  if (dashboardState.device?.status === 'unknown') return false;
   return (
     String(dashboardState.device?.status || '')
       .trim()

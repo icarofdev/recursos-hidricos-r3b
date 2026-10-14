@@ -62,7 +62,7 @@ export async function discoverMonitorie(c: Context, deviceId: number): Promise<R
       started: now(),
     };
 
-  const client = new MonitorieReadClient(new MonitorieAuth(c.env), new D1MonitorieGate(c.env.DB));
+  const client = new MonitorieReadClient(new MonitorieAuth(c.env), new D1MonitorieGate(c.env.DB, deviceId));
   if (scan.totalPages === null || scan.index >= scan.devices.length) {
     if (scan.totalPages !== null && scan.page + 1 >= scan.totalPages) {
       await c.env.DB.prepare('DELETE FROM settings WHERE key=?').bind(key).run();

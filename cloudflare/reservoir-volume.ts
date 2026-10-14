@@ -165,17 +165,26 @@ export function calculateVolume(
     volume,
     nivel: (volume / row.capacity_liters) * 100,
     water_height_cm: waterHeight,
-    measurement_quality: 'valid',
+    measurement_quality:
+      distance < config.full_distance_cm || distance > config.empty_distance_cm
+        ? 'within_tolerance'
+        : 'valid',
     volume_source: 'backend',
   };
 }
 
-export function configuredReading<T extends { distancia?: unknown; volume?: unknown; nivel?: unknown }>(
-  row: ReservoirRow,
-  reading: T,
-): T {
+export function configuredReading<
+  T extends { distancia?: unknown; volume?: unknown; nivel?: unknown; measurement_quality?: unknown },
+>(row: ReservoirRow, reading: T): T {
   if (row.device_type !== 'SM-WU') return reading;
   if (row.geometry === 'reported')
-    return { ...reading, measurement_quality: 'reported', volume_source: 'monitorie_or_device' };
+    return {
+      ...reading,
+      measurement_quality:
+        reading.volume === null || reading.nivel === null
+          ? (reading.measurement_quality ?? 'missing')
+          : 'reported',
+      volume_source: 'monitorie_or_device',
+    };
   return { ...reading, ...calculateVolume(row, reading.distancia) } as T;
 }

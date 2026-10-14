@@ -40,10 +40,17 @@ export async function clearFailureLimit(c: Context, scope: string, identity: str
  * Neither success, a new challenge, nor recovery resets the fixed window.
  */
 export async function reserveTotpAttempt(c: Context, userId: number): Promise<void> {
-  const key = await keyFor(c, 'admin-mfa-attempt', String(userId));
+  return reserveAttempt(c, 'admin-mfa-attempt', String(userId), 10, 300);
+}
+export async function reserveAttempt(
+  c: Context,
+  scope: string,
+  identity: string,
+  limit: number,
+  seconds: number,
+): Promise<void> {
+  const key = await keyFor(c, scope, identity);
   const time = now();
-  const limit = 10;
-  const seconds = 300;
   const reserved = await c.env.DB.prepare(
     `INSERT INTO rate_limits(key_hash,attempts,expires_at) VALUES (?,1,?)
  ON CONFLICT(key_hash) DO UPDATE SET
@@ -73,22 +80,6 @@ export async function rateLimit(
   limit: number,
   seconds: number,
 ): Promise<void> {
-  const key = await keyFor(c, scope, identity);
-  const time = now();
-  const row = await c.env.DB.prepare(
-    `INSERT INTO rate_limits(key_hash, attempts, expires_at) VALUES (?,1,?)
- ON CONFLICT(key_hash) DO UPDATE SET
- attempts=CASE WHEN rate_limits.expires_at<=? THEN 1 ELSE MIN(rate_limits.attempts+1,1000000) END,
- expires_at=CASE WHEN rate_limits.expires_at<=? THEN excluded.expires_at ELSE rate_limits.expires_at END
- RETURNING attempts, expires_at`,
-  )
-    .bind(key, time + seconds, time, time)
-    .first<{ attempts: number; expires_at: number }>();
-  if (!row || row.attempts > limit)
-    throw new HttpError(
-      429,
-      'RATE_LIMIT_EXCEEDED',
-      'Muitas tentativas. Aguarde e tente novamente.',
-      Math.max(1, (row?.expires_at ?? time + seconds) - time),
-    );
+  // Saturated windows are read-only; rejected requests never extend the window.
+  await reserveAttempt(c, scope, identity, limit, seconds);
 }

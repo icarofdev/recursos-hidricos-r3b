@@ -15,6 +15,16 @@ try {
       .bind(hash, time + 86400, time, time)
       .first();
     if (!row) throw new Error('Demonstração já vinculada. Nenhum vínculo alterado.');
+    await db.batch([
+      db
+        .prepare(
+          'UPDATE activation_codes SET revoked_at=? WHERE device_id=1 AND used_at IS NULL AND revoked_at IS NULL',
+        )
+        .bind(time),
+      db
+        .prepare('INSERT INTO activation_codes(device_id,code_hash,expires_at,created_at) VALUES(1,?,?,?)')
+        .bind(hash, time + 86400, time),
+    ]);
     console.log('Código fictício local (24h): ' + code);
   } else console.log('Migrations locais aplicadas.');
 } finally {

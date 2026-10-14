@@ -9,12 +9,17 @@ MAIL_MODE = "disabled"
 MONITORIE_CACHE_SECONDS = "300"
 DEVICE_OFFLINE_AFTER_SECONDS = "90"
 INGEST_ENABLED = "false"
+APP_URL = "https://hidra-r3b.vercel.app"
 CORS_ORIGINS = "https://hidra-r3b.vercel.app"
+MAIL_REQUIRED = "true"
+OBSERVABILITY_SAMPLE_RATE = "100"
+HISTORY_MAX_SAMPLES = "10000"
 MONITORIE_SMWU_MAPPING = '{"distancia":{"key":"d","unit":"cm"},"nivel":{"key":"nivel","unit":"%"},"volume":{"key":"volume","unit":"L"},"rssi_wifi":{"key":"rssi_wifi","unit":"dBm"}}'
 MONITORIE_SMWA_MAPPING = '{"vazao":{"key":"vazao","unit":"L/h"},"consumo_acumulado":{"key":"consumo","unit":"L"},"rssi_wifi":{"key":"rssi_wifi","unit":"dBm"}}'
 READINGS_RETENTION_DAYS = "90"
 AUDIT_RETENTION_DAYS = "180"
-RETENTION_BATCH_SIZE = "500"
+RETENTION_BATCH_SIZE = "2000"
+RETENTION_MAX_BATCHES = "2"
 
 
 [[d1_databases]]
@@ -37,7 +42,8 @@ INGEST_ENABLED = "false"
 # do deployment Vercel de Preview, sem sobrescrever bindings com valores vazios.
 READINGS_RETENTION_DAYS = "90"
 AUDIT_RETENTION_DAYS = "180"
-RETENTION_BATCH_SIZE = "500"
+RETENTION_BATCH_SIZE = "2000"
+RETENTION_MAX_BATCHES = "2"
 
 [[env.preview.d1_databases]]
 binding = "DB"
@@ -47,7 +53,7 @@ migrations_dir = "cloudflare/migrations"
 
 
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["* * * * *"]
 
 [observability.logs]
 enabled = true

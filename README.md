@@ -77,6 +77,9 @@ Para manter a autenticação da Monitor IE no backend, configure `MONITORIE_USER
 
 Para promover um usuário a administrador no ambiente local ou remoto:
 
+Confirme primeiro o e-mail da conta. Novas promoções e compartilhamentos exigem prova
+de titularidade; contas administrativas existentes mantêm o login e MFA.
+
 ```sh
 # Promover usuário no banco local
 node scripts/cloudflare/admin.mjs set-admin seu_email@dominio.com
@@ -122,6 +125,8 @@ npm run check
 ## Documentação Detalhada
 
 - [Publicação e Configuração na Cloudflare](docs/CLOUDFLARE.md)
+- [Correções de segurança e validação local](docs/REMEDIATION.md)
+- [Operação, publicação, rotação e recuperação](docs/OPERATIONS.md)
 - [Protocolo, Contrato e Pendências da MonitorIE](docs/MONITORIE.md)
 - [Inventário e Decisões de Migração](docs/MIGRATION.md)
 - [Documentação PHP/VPS Legada Preservada](docs/LEGACY-PHP.md)

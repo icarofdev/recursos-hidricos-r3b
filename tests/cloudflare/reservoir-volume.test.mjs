@@ -27,6 +27,8 @@ test('uniform section uses sensor offset and useful height: empty, half, full', 
   ])
     assert.equal(calculateVolume(row(), distance).volume, liters);
   assert.equal(calculateVolume(row(), 70).nivel, 50);
+  assert.equal(calculateVolume(row(), 121).measurement_quality, 'within_tolerance');
+  assert.equal(calculateVolume(row(), 19).measurement_quality, 'within_tolerance');
 });
 test('horizontal cylinder circular segments differ from proportional height', () => {
   assert.equal(calculateVolume(row('horizontal_cylinder', { diameter_cm: 100 }), 120).volume, 0);

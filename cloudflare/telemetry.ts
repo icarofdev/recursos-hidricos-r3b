@@ -6,7 +6,7 @@ import { body, configInt, HttpError, iso, json, method, now, positiveId, queryIn
 import { equal } from './auth/crypto';
 import { clientIP, rateLimit } from './auth/rate-limit';
 import { requireUser } from './auth/sessions';
-import { owned, present } from './db/reservoirs';
+import { assertCurrentAccess, owned, present } from './db/reservoirs';
 import { remoteHistory, remoteSnapshot, validateReading } from './monitorie/cache';
 import { configuredReading } from './reservoir-volume';
 
@@ -20,6 +20,7 @@ const fromLocal = (row: LocalReading): Reading => ({
   volume: row.volume,
   rssi_wifi: row.rssi_wifi,
   timestamp: iso(row.created_at)!,
+  measurement_quality: row.measurement_quality,
 });
 const fromLocalWA = (row: LocalSMWAReading): SMWAReading => ({
   id: row.id,
@@ -59,11 +60,15 @@ async function snapshot(c: Context, row: ReservoirRow): Promise<Snapshot> {
   // O tempo de cache nunca transforma uma leitura antiga em dispositivo online.
   const age =
     result.device.last_seen === null ? Infinity : now() - Date.parse(result.device.last_seen) / 1000;
-  if (age >= result.device.offline_after_seconds) result.device.status = 'offline';
+  const cacheAge = result.device.cache_age_seconds ?? 0;
+  result.device.data_stale = cacheAge >= result.device.offline_after_seconds;
+  if (row.source === 'monitorie' && (result.device.data_stale || result.device.integration_status !== 'ok'))
+    result.device.status = 'unknown';
+  else if (result.device.status !== 'unknown' && age >= result.device.offline_after_seconds)
+    result.device.status = 'offline';
   result.device.telemetry_linked = row.source !== 'monitorie' || row.external_id !== null;
   result.units = telemetryUnits(row.source, row.device_type, c.env);
-  if (result.data && row.user_id !== c.user?.id && Date.parse(result.data.timestamp) < row.linked_at * 1000)
-    result.data = null;
+  if (result.data && Date.parse(result.data.timestamp) < Math.round(row.linked_at * 1000)) result.data = null;
   if (result.data) result.data = configuredReading(row, result.data);
   return result;
 }
@@ -97,10 +102,26 @@ function alerts(value: Snapshot, row: ReservoirRow) {
 export async function telemetryRoute(c: Context, route: string): Promise<Response> {
   if (route === 'ingest') return ingest(c);
   method(c, ['GET']);
-  requireUser(c);
+  const user = requireUser(c);
+  await rateLimit(c, 'telemetry-user', String(user.id), 120, 60);
   const row = await owned(c, positiveId(c.url.searchParams.get('reservoir_id')));
+  await rateLimit(
+    c,
+    route === 'history' ? 'history-user' : 'snapshot-user',
+    String(user.id),
+    route === 'history' ? 6 : 60,
+    60,
+  );
+  await rateLimit(
+    c,
+    route === 'history' ? 'history-device' : 'snapshot-device',
+    String(row.device_id),
+    route === 'history' ? 12 : 120,
+    60,
+  );
   if (route === 'history') return history(c, row);
   const value = await snapshot(c, row);
+  await assertCurrentAccess(c, row);
   if (route === 'snapshot')
     return json({ success: true, reservoir: present(c, row), ...value, alerts: alerts(value, row) });
   if (route === 'status') return json({ success: true, reservoir_id: row.id, device: value.device });

@@ -18,6 +18,11 @@
     <script defer src="/static/js/dashboard.js"></script>
   </head>
   <body class="is-loading">
+    <aside id="email-proof-banner" hidden>
+      <p>Confirme seu e-mail para conceder ou receber novos acessos.</p>
+      <button id="request-email-verification" type="button">Enviar confirmação</button>
+      <p id="email-proof-feedback" role="status" aria-live="polite"></p>
+    </aside>
     <div class="demo-banner" hidden>Demonstração local — os dados de telemetria são simulados.</div>
     <a class="skip-link" href="#conteudo-principal">Ir para o conteúdo principal</a>
 
@@ -834,5 +839,6 @@
         Ative o JavaScript para acompanhar as leituras do sistema.
       </div></noscript
     >
+    <script src="/static/js/email-verification.js" defer></script>
   </body>
 </html>

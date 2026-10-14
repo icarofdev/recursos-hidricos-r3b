@@ -1,4 +1,5 @@
 import type { Context } from '../types';
+import { configInt } from '../http';
 
 const WINDOW_SECONDS = 300;
 const paths = new Set([
@@ -17,6 +18,8 @@ const paths = new Set([
   '/api/auth/forgot-password',
   '/api/auth/reset-password',
   '/api/auth/csrf',
+  '/api/auth/verify-email',
+  '/api/auth/request-email-verification',
   '/api/auth/delete-account',
   '/api/auth/admin-totp/setup',
   '/api/auth/admin-totp/confirm',
@@ -82,6 +85,11 @@ function country(request: Request): string {
 
 /** Observe only. All dimensions are bounded; no URL query, body, headers or IP is stored. */
 export async function observeEndpoint(c: Context, status: number): Promise<void> {
+  // Invalid/anonymous/denied requests never write D1. Successful authenticated
+  // requests use independent sampling: no isolate-local periodic flush is required.
+  if (!c.user || status >= 400 || status === 204) return;
+  const rate = configInt(c.env.OBSERVABILITY_SAMPLE_RATE, 100, 1, 10000);
+  if (crypto.getRandomValues(new Uint32Array(1))[0] % rate !== 0) return;
   const path = endpoint(c.url.pathname);
   const method = ['GET', 'POST', 'HEAD', 'OPTIONS', 'PUT', 'PATCH', 'DELETE'].includes(c.request.method)
     ? c.request.method
@@ -114,6 +122,7 @@ export async function observeEndpoint(c: Context, status: number): Promise<void>
         window_start: windowStart,
         window_seconds: WINDOW_SECONDS,
         window_count: row.request_count,
+        sample_rate: rate,
       }),
     );
   } catch {

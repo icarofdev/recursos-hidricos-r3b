@@ -1,8 +1,16 @@
 import type { Context, User } from '../types';
 import { body, HttpError, isLocal, json, method, now, safePath, sameOrigin, string } from '../http';
-import { hashPassword, randomToken, sha256, validatePassword, verifyPassword } from './crypto';
+import {
+  hashPassword,
+  passwordNeedsUpgrade,
+  randomToken,
+  sha256,
+  validatePassword,
+  verifyPassword,
+} from './crypto';
 import { csrf, ensureSession, logout, newSession, publicUser, requireUser } from './sessions';
-import { checkFailureLimit, clearFailureLimit, clientIP, rateLimit } from './rate-limit';
+import { clearFailureLimit, clientIP, rateLimit, reserveAttempt } from './rate-limit';
+import { emailVerification } from './email-verification';
 import { resetURL, sendPasswordReset } from '../mail';
 import { startAdminChallenge, totpRoute } from './totp-routes';
 import { securityEvent } from './security-events';
@@ -19,6 +27,7 @@ export async function authRoute(c: Context, route: string): Promise<Response> {
       user: publicUser(user),
       csrf_token: c.session!.csrf_token,
       admin_mfa_required: user.role === 'admin' && !c.session?.admin_mfa_at,
+      read_only: !!c.session?.read_only,
     });
   }
   if (route === 'csrf') {
@@ -41,12 +50,13 @@ export async function authRoute(c: Context, route: string): Promise<Response> {
   method(c, ['POST']);
   if (route === 'logout') {
     requireUser(c);
-    csrf(c);
+    csrf(c, true);
     await body(c, []);
     await logout(c);
     return json({ success: true, redirect: '/login' });
   }
   csrf(c);
+  if (route === 'verify-email' || route === 'request-email-verification') return emailVerification(c, route);
   if (
     route === 'admin-totp/setup' ||
     route === 'admin-totp/confirm' ||
@@ -91,14 +101,22 @@ export async function authRoute(c: Context, route: string): Promise<Response> {
     try {
       await rateLimit(c, 'login-ip', ip, isLocal(c) ? 200 : 20, 900);
       await rateLimit(c, 'login-identity', `${ip}|${email}`, 10, 900);
-      await checkFailureLimit(c, 'login-account-failure', email, 10);
+      await reserveAttempt(c, 'login-account-failure', email, 10, 60);
       user = await c.env.DB.prepare('SELECT * FROM users WHERE email=?').bind(email).first<User>();
       const valid = await verifyPassword(password, user?.password_hash, c.env);
       if (!user || !valid) {
-        await rateLimit(c, 'login-account-failure', email, 10, 60);
         throw new HttpError(401, 'INVALID_CREDENTIALS', 'E-mail ou senha inválidos.');
       }
       await clearFailureLimit(c, 'login-account-failure', email);
+      if (passwordNeedsUpgrade(user.password_hash, c.env)) {
+        const updated = await c.env.DB.prepare(
+          'UPDATE users SET password_hash=?,session_version=session_version+1,updated_at=? WHERE id=? AND password_hash=? RETURNING *',
+        )
+          .bind(await hashPassword(password, c.env), now(), user.id, user.password_hash)
+          .first<User>();
+        if (!updated) throw new HttpError(409, 'AUTH_STATE_CHANGED', 'Reinicie o login.');
+        user = updated;
+      }
       if (user.role === 'admin') {
         const response = await startAdminChallenge(c, user, data.remember === true, data.next);
         await securityEvent(c, 'login_password', 'success', user.id, email);

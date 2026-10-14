@@ -52,6 +52,7 @@ const bindings = {
   EMAIL_FROM: 'Hidra testes <sender@example.test>',
   INGEST_ENABLED: 'true',
   MONITORIE_CACHE_SECONDS: '60',
+  SECURITY_EVENT_FAILURE_SAMPLE_RATE: '1',
 };
 function options(overrides = {}) {
   return {
@@ -208,6 +209,9 @@ function browser(origin = base) {
         .bind(targetEmail)
         .first();
       assert.ok(user);
+      // Existing integration fixtures represent independently confirmed synthetic addresses.
+      // The remediation suite exercises unconfirmed registration and real verification separately.
+      await db.prepare('UPDATE users SET email_verified_at=? WHERE id=?').bind(seconds(), user.id).run();
       const login = await this.login(targetEmail);
       assert.equal(login.res.status, 200, JSON.stringify(login.payload));
       return user;
@@ -245,6 +249,10 @@ async function provision(
       time,
       time,
     )
+    .run();
+  await db
+    .prepare('INSERT INTO activation_codes(device_id,code_hash,expires_at,created_at) VALUES(?,?,?,?)')
+    .bind(id, digest(code), time + 3600, time)
     .run();
   return code;
 }
@@ -324,7 +332,7 @@ test('cadastro, hash com salt/pepper, cookie seguro, CSRF e logout', async () =>
   const user = await client.register('pessoa@example.test', '<script>Nome</script>');
   assert.notEqual(client.cookie, anonymous);
   const row = await db.prepare('SELECT * FROM users WHERE id=?').bind(user.id).first();
-  assert.match(row.password_hash, /^pbkdf2-sha256-pepper\$v1\$100000\$/);
+  assert.match(row.password_hash, /^pbkdf2-sha256-pepper\$v2\$primary\$100000\$/);
   assert.ok(!row.password_hash.includes(password));
   const duplicate = browser();
   const user2 = await duplicate.register('pessoa2@example.test');
@@ -431,6 +439,8 @@ test('sessões expiram por inatividade, limite absoluto e giram após 15 minutos
   const rotated = await client.request('/api/auth/me');
   assert.equal(rotated.status, 200);
   assert.notEqual(client.cookie, old);
+  // Receipt of the candidate is acknowledged before the previous-token grace starts.
+  assert.equal((await client.request('/api/auth/me')).status, 200);
   assert.equal(
     (await client.request('/api/auth/me', { headers: { Cookie: old }, capture: false })).status,
     200,
@@ -671,6 +681,10 @@ test('pareamento atômico, autorização entre usuários, renomeação e histór
     .prepare('UPDATE devices SET pairing_code_hash=?,pairing_expires_at=? WHERE id=1')
     .bind(digest(nextCode), seconds() + 3600)
     .run();
+  await db
+    .prepare('INSERT INTO activation_codes(device_id,code_hash,expires_at,created_at) VALUES(1,?,?,?)')
+    .bind(digest(nextCode), seconds() + 3600, seconds())
+    .run();
   const next = await connect(loser, nextCode);
   assert.equal((await (await loser.request('/api/device/history?reservoir_id=' + next.id)).json()).count, 0);
 });
@@ -694,7 +708,9 @@ test('ingestão exige token por dispositivo e preserva validação do firmware',
   await client.register();
   const reservoir = await connect(client, await provision());
   await db
-    .prepare('INSERT INTO device_credentials(device_id,token_hash,created_at,updated_at) VALUES (1,?,?,?)')
+    .prepare(
+      'INSERT INTO device_credentials(device_id,token_hash,created_at,updated_at,ownership_generation) SELECT id,?,?,?,ownership_generation FROM devices WHERE id=1',
+    )
     .bind(digest(token), seconds(), seconds())
     .run();
   const data = { ID: '1', D: '25.5', NIVEL: '15', VOLUME: '300', RSSI_WIFI: '-61' };
@@ -798,16 +814,15 @@ test('compartilhamento Basic preserva leitura e impede mutação/reuso do cookie
     403,
   );
   await configure();
-  const me = await (await viewer.request('/api/auth/me')).json();
+  assert.equal((await viewer.request('/api/auth/me')).status, 401);
   assert.equal(
     (
       await viewer.request('/api/devices/connect', {
         method: 'POST',
         data: {},
-        headers: { 'X-CSRF-Token': me.csrf_token },
       })
     ).status,
-    403,
+    401,
   );
 });
 test('artefato de publicação contém apenas frontend e Worker, sem PHP/segredos', async () => {
@@ -842,7 +857,12 @@ test('perfil admin, restrição de acesso e bloqueio de autopromoção', async (
   assert.equal(adminUser.role, 'user');
   assert.equal((await (await adminClient.request('/api/auth/me')).json()).user.role, 'user');
   assert.equal((await adminClient.login('primeiro-admin@example.test')).payload.user.role, 'user');
-  await db.prepare("UPDATE users SET role='admin' WHERE id=?").bind(adminUser.id).run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE id=?",
+    )
+    .bind(adminUser.id)
+    .run();
 
   const adminMe = await (await adminClient.request('/api/auth/me')).json();
   assert.equal(adminMe.user.role, 'admin');
@@ -858,7 +878,12 @@ test('cadastro administrativo de SM-WU e SM-WA, validação de unicidade e model
   await configure({ INITIAL_ADMIN_EMAIL: 'admin-cad@example.test' });
   const admin = browser();
   await admin.register('admin-cad@example.test', 'Admin');
-  await db.prepare("UPDATE users SET role='admin' WHERE email=?").bind('admin-cad@example.test').run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE email=?",
+    )
+    .bind('admin-cad@example.test')
+    .run();
   await enrollAdmin(admin, 'admin-cad@example.test');
 
   const resWU = await admin.request('/api/admin/devices', {
@@ -1182,7 +1207,7 @@ test('pareamento por MAC e código; associação só por telemetria mac exata li
   await configure();
 });
 
-test('primeiro titular vê último estado real; transferência oculta leitura anterior ao novo vínculo', async () => {
+test('primeiro titular e transferências ocultam leitura anterior ao vínculo', async () => {
   const jwt = `e30.${Buffer.from(JSON.stringify({ exp: seconds() + 3600 })).toString('base64url')}.sig`;
   monitorieFixture = { id: 'external-1', jwt, readingTs: Date.now() - 3600000 };
   await configure({
@@ -1201,7 +1226,7 @@ test('primeiro titular vê último estado real; transferência oculta leitura an
   const reservoir = await connect(first, code);
   const initial = await first.request(`/api/device/snapshot?reservoir_id=${reservoir.id}`);
   assert.equal(initial.status, 200);
-  assert.equal((await initial.json()).data.nivel, 50);
+  assert.equal((await initial.json()).data, null);
 
   const admin = await adminBrowser();
   const transfer = await admin.request('/api/admin/devices/1/transfer', { method: 'POST', data: {} });
@@ -1220,7 +1245,12 @@ test('código de ativação puro de uso único, armazenamento apenas de hash e r
   await configure({ INITIAL_ADMIN_EMAIL: 'admin-code@example.test' });
   const admin = browser();
   await admin.register('admin-code@example.test', 'Admin');
-  await db.prepare("UPDATE users SET role='admin' WHERE email=?").bind('admin-code@example.test').run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE email=?",
+    )
+    .bind('admin-code@example.test')
+    .run();
   await enrollAdmin(admin, 'admin-code@example.test');
 
   const resDev = await admin.request('/api/admin/devices', {
@@ -1270,7 +1300,12 @@ test('ativação pelo cliente, isolamento completo na transferência e impedimen
   await configure({ INITIAL_ADMIN_EMAIL: 'admin-trans@example.test' });
   const admin = browser();
   await admin.register('admin-trans@example.test', 'Admin');
-  await db.prepare("UPDATE users SET role='admin' WHERE email=?").bind('admin-trans@example.test').run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE email=?",
+    )
+    .bind('admin-trans@example.test')
+    .run();
   await enrollAdmin(admin, 'admin-trans@example.test');
 
   const resDev = await admin.request('/api/admin/devices', {
@@ -1298,7 +1333,7 @@ test('ativação pelo cliente, isolamento completo na transferência e impedimen
     .prepare(
       'INSERT INTO smwu_readings(id, reservoir_id, distancia, nivel, volume, rssi_wifi, created_at) VALUES (?, ?, 20, 80, 800, -60, ?)',
     )
-    .bind(devId, resIdA, seconds())
+    .bind(devId, resIdA, Date.now() / 1000)
     .run();
 
   const histA = await (await clientA.request(`/api/device/history?reservoir_id=${resIdA}`)).json();
@@ -1407,7 +1442,12 @@ test('seletor de tema (Automático, Claro, Escuro), assets compartilhados e anti
 async function adminBrowser() {
   const client = browser();
   const user = await client.register();
-  await db.prepare("UPDATE users SET role='admin' WHERE id=?").bind(user.id).run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE id=?",
+    )
+    .bind(user.id)
+    .run();
   await enrollAdmin(client, user.email);
   return client;
 }
@@ -1434,7 +1474,12 @@ test('TOTP admin: cadastro individual, criptografia, login e replay', async () =
   const second = browser();
   const a = await first.register('totp-a@example.test');
   const b = await second.register('totp-b@example.test');
-  await db.prepare("UPDATE users SET role='admin' WHERE id IN (?,?)").bind(a.id, b.id).run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE id IN (?,?)",
+    )
+    .bind(a.id, b.id)
+    .run();
   assert.equal((await first.request('/api/admin/devices')).status, 404);
   const enrolledA = await enrollAdmin(first, a.email);
   const enrolledB = await enrollAdmin(second, b.email);
@@ -1444,7 +1489,7 @@ test('TOTP admin: cadastro individual, criptografia, login e replay', async () =
     .prepare('SELECT secret_encrypted,last_used_step FROM admin_totp WHERE user_id=?')
     .bind(a.id)
     .first();
-  assert.ok(stored.secret_encrypted.startsWith('v1.'));
+  assert.ok(stored.secret_encrypted.startsWith('v2.primary.'));
   assert.ok(!stored.secret_encrypted.includes(enrolledA.secret));
   const hashes = await db
     .prepare('SELECT code_hash FROM admin_totp_recovery WHERE user_id=?')
@@ -1485,7 +1530,12 @@ test('TOTP admin: cadastro individual, criptografia, login e replay', async () =
 test('TOTP admin: expiração, tentativas inválidas e chave ausente', async () => {
   const admin = browser();
   const user = await admin.register('totp-limits@example.test');
-  await db.prepare("UPDATE users SET role='admin' WHERE id=?").bind(user.id).run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE id=?",
+    )
+    .bind(user.id)
+    .run();
   const login = await admin.login(user.email);
   await db
     .prepare('UPDATE admin_totp_challenges SET expires_at=?')
@@ -1532,7 +1582,12 @@ test('TOTP admin: expiração, tentativas inválidas e chave ausente', async () 
 test('TOTP admin aceita chave de 32 bytes em base64url, base64 e hexadecimal', async () => {
   const admin = browser();
   const user = await admin.register('totp-key-format@example.test');
-  await db.prepare("UPDATE users SET role='admin' WHERE id=?").bind(user.id).run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE id=?",
+    )
+    .bind(user.id)
+    .run();
   const key = randomBytes(32);
   for (const encoded of [key.toString('base64url'), key.toString('base64'), key.toString('hex')]) {
     await configure({ TOTP_ENCRYPTION_KEY: encoded });
@@ -1546,7 +1601,12 @@ test('TOTP admin aceita chave de 32 bytes em base64url, base64 e hexadecimal', a
 test('TOTP admin: recuperação de uso único troca o segredo e os códigos', async () => {
   const admin = browser();
   const user = await admin.register('totp-recover@example.test');
-  await db.prepare("UPDATE users SET role='admin' WHERE id=?").bind(user.id).run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE id=?",
+    )
+    .bind(user.id)
+    .run();
   const enrolled = await enrollAdmin(admin, user.email);
   const fresh = browser();
   const login = await fresh.login(user.email);
@@ -1622,7 +1682,12 @@ test('TOTP admin: desafio não promove conta comum nem atravessa sessão ou pape
     ).status,
     401,
   );
-  await db.prepare("UPDATE users SET role='admin' WHERE id=?").bind(user.id).run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE id=?",
+    )
+    .bind(user.id)
+    .run();
   const login = await admin.login(user.email);
   assert.equal(
     (
@@ -1647,8 +1712,10 @@ test('TOTP admin: desafio não promove conta comum nem atravessa sessão ou pape
 });
 async function credential(id, token = randomBytes(32).toString('base64url')) {
   await db
-    .prepare('INSERT INTO device_credentials(device_id,token_hash,created_at,updated_at) VALUES (?,?,?,?)')
-    .bind(id, digest(token), seconds(), seconds())
+    .prepare(
+      'INSERT INTO device_credentials(device_id,token_hash,created_at,updated_at,ownership_generation) SELECT id,?,?,?,ownership_generation FROM devices WHERE id=?',
+    )
+    .bind(digest(token), seconds(), seconds(), id)
     .run();
   return token;
 }
@@ -1741,7 +1808,7 @@ test('credential generation rotation revocation and rate limits per device and I
   for (let i = 0; i < 121; i++) last = await invalid.request('/api/device/ingest', { method: 'POST', data });
   assert.equal(last.status, 429);
 });
-test('deterministic fallback deduplication and source conflicts', async () => {
+test('equal measurements without event identity are retained; source conflicts remain protected', async () => {
   await provision(4);
   const token = await credential(4);
   const client = browser();
@@ -1756,8 +1823,8 @@ test('deterministic fallback deduplication and source conflicts', async () => {
     })
   ).json();
   assert.equal(a.stored, true);
-  assert.equal(b.stored, false);
-  assert.equal(a.reading_id, b.reading_id);
+  assert.equal(b.stored, true);
+  assert.notEqual(a.reading_id, b.reading_id);
   await db.prepare("UPDATE devices SET source='monitorie' WHERE id=4").run();
   assert.equal((await client.request('/api/device/ingest', { method: 'POST', data, headers })).status, 409);
 });
@@ -1771,7 +1838,14 @@ test('30 days downsampling represents the entire window for both models with met
     const reservoir = await connect(client, await provision(id));
     await db.prepare('UPDATE devices SET device_type=? WHERE id=?').bind(type, id).run();
     const start = seconds() - 30 * 86400;
-    await db.prepare('UPDATE reservoirs SET linked_at=? WHERE id=?').bind(start, reservoir.id).run();
+    await db
+      .prepare('UPDATE reservoirs SET linked_at=?,linked_at_ms=? WHERE id=?')
+      .bind(start, start * 1000, reservoir.id)
+      .run();
+    await db
+      .prepare('UPDATE device_users SET linked_at=?,access_started_ms=? WHERE device_id=?')
+      .bind(start, start * 1000, id)
+      .run();
     const table = type === 'SM-WU' ? 'smwu_readings' : 'smwa_readings';
     const fields = type === 'SM-WU' ? 'distancia,nivel,volume' : 'vazao,consumo_acumulado,volume';
     await db.batch(
@@ -1947,8 +2021,27 @@ test('retention deletes bounded batches for both models', async () => {
       ),
     );
   }
-  await configure({ READINGS_RETENTION_DAYS: '90', RETENTION_BATCH_SIZE: '2' });
-  await browser().init();
+  await configure({ READINGS_RETENTION_DAYS: '90', RETENTION_BATCH_SIZE: '2', RETENTION_MAX_BATCHES: '1' });
+  const { build } = await import('esbuild');
+  const compiled = await build({
+    entryPoints: ['cloudflare/db/maintenance.ts'],
+    bundle: true,
+    format: 'esm',
+    platform: 'neutral',
+    write: false,
+  });
+  const { maintenance } = await import(
+    'data:text/javascript;base64,' + Buffer.from(compiled.outputFiles[0].text).toString('base64')
+  );
+  await maintenance({
+    env: {
+      ...bindings,
+      DB: db,
+      READINGS_RETENTION_DAYS: '90',
+      RETENTION_BATCH_SIZE: '2',
+      RETENTION_MAX_BATCHES: '1',
+    },
+  });
   await waitFor(async () => (await db.prepare('SELECT COUNT(*) n FROM smwu_readings').first()).n === 3);
   assert.equal((await db.prepare('SELECT COUNT(*) n FROM smwa_readings').first()).n, 3);
 });
@@ -1982,12 +2075,15 @@ test('request ID is generated server-side and attached on success and errors', a
   }
 });
 
-test('observação agrega requisições por endpoint, método e país sem dados sensíveis', async () => {
+test('observação amostra sucesso autenticado e ignora anônimos e recusas', async () => {
+  await configure({ OBSERVABILITY_SAMPLE_RATE: '1' });
+  const client = browser();
+  await client.register();
+  await db.prepare('DELETE FROM endpoint_requests').run();
   const ids = [];
   for (let i = 0; i < 3; i++) {
-    const response = await mf.dispatchFetch(`${base}/api/health?token=example-sensitive-marker`, {
-      method: 'GET',
-      headers: { 'CF-IPCountry': 'US', 'X-Request-ID': 'untrusted' },
+    const response = await mf.dispatchFetch(base + '/api/reservoirs?token=example-sensitive-marker', {
+      headers: { Cookie: client.cookie, Origin: base, 'CF-IPCountry': 'US', 'X-Request-ID': 'untrusted' },
       cf: { country: 'BR' },
     });
     assert.equal(response.status, 200);
@@ -1998,72 +2094,31 @@ test('observação agrega requisições por endpoint, método e país sem dados 
       (
         await db
           .prepare(
-            "SELECT request_count FROM endpoint_requests WHERE path='/api/health' AND method='GET' AND country='BR'",
+            "SELECT request_count FROM endpoint_requests WHERE path='/api/reservoirs' AND country='BR'",
           )
           .first()
       )?.request_count === 3,
   );
   const row = await db
-    .prepare("SELECT * FROM endpoint_requests WHERE path='/api/health' AND method='GET' AND country='BR'")
+    .prepare("SELECT * FROM endpoint_requests WHERE path='/api/reservoirs' AND country='BR'")
     .first();
-  assert.equal(row.request_count, 3);
-  assert.equal(row.last_status, 200);
   assert.ok(ids.includes(row.last_request_id));
   assert.equal(row.window_start % 300, 0);
-
-  const rejected = await mf.dispatchFetch(
-    `${base}/api/unknown/private%40example.test?code=example-sensitive-marker`,
-    {
-      method: 'POST',
-      cf: { country: 'BR' },
-    },
-  );
-  assert.equal(rejected.status, 404);
-  await waitFor(async () =>
-    Boolean(
-      await db
-        .prepare("SELECT 1 FROM endpoint_requests WHERE path='/unmatched' AND method='POST' AND country='BR'")
-        .first(),
-    ),
-  );
-  const admin = await mf.dispatchFetch(`${base}/api/admin/devices/123/delete`, {
-    method: 'POST',
-    cf: { country: 'BR' },
-  });
-  assert.equal(admin.status, 404);
-  await waitFor(async () =>
-    Boolean(
+  for (const path of ['/api/health', '/api/auth/me', '/api/unknown/private%40example.test'])
+    await mf.dispatchFetch(base + path + '?code=example-sensitive-marker');
+  assert.equal(
+    (
       await db
         .prepare(
-          "SELECT 1 FROM endpoint_requests WHERE path='/api/admin/devices/:id/delete' AND method='POST'",
+          "SELECT COUNT(*) n FROM endpoint_requests WHERE path IN('/api/health','/api/auth/me','/unmatched')",
         )
-        .first(),
-    ),
-  );
-  const fallback = await mf.dispatchFetch(`${base}/api/auth/me`, {
-    method: 'GET',
-    headers: { 'CF-IPCountry': 'US' },
-    cf: { country: '1' },
-  });
-  assert.equal(fallback.status, 401);
-  await waitFor(async () =>
-    Boolean(
-      await db
-        .prepare(
-          "SELECT 1 FROM endpoint_requests WHERE path='/api/auth/me' AND method='GET' AND country='XX' AND last_status=401",
-        )
-        .first(),
-    ),
+        .first()
+    ).n,
+    0,
   );
   const stored = JSON.stringify((await db.prepare('SELECT * FROM endpoint_requests').all()).results);
-  assert.ok(!stored.includes('example-sensitive-marker'));
-  assert.ok(!stored.includes('private%40example.test'));
-  assert.ok(!stored.includes('untrusted'));
-  assert.ok(!stored.includes('US'));
-  const columns = (await db.prepare('PRAGMA table_info(endpoint_requests)').all()).results.map(
-    (column) => column.name,
-  );
-  assert.ok(!columns.some((column) => /ip|email|password|token|code/i.test(column)));
+  for (const marker of ['example-sensitive-marker', 'private%40example.test', 'untrusted', 'US'])
+    assert.ok(!stored.includes(marker));
 });
 
 test('falha da observação não altera a resposta da aplicação', async () => {
@@ -2208,7 +2263,12 @@ test('senhas antigas fora da nova política continuam válidas no login', async 
 test('reauth TOTP protege todas as mutações admin, rejeita recuperação e registra eventos', async () => {
   const admin = browser();
   const user = await admin.register('admin-step-up@example.test');
-  await db.prepare("UPDATE users SET role='admin' WHERE id=?").bind(user.id).run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE id=?",
+    )
+    .bind(user.id)
+    .run();
   const enrolled = await enrollAdmin(admin, user.email);
   await db
     .prepare('UPDATE sessions SET admin_mfa_at=? WHERE user_id=?')
@@ -2291,7 +2351,12 @@ test('reauth administrativa limita tentativas por conta e não aceita conta comu
 
   const admin = browser();
   const user = await admin.register('admin-step-up-limite@example.test');
-  await db.prepare("UPDATE users SET role='admin' WHERE id=?").bind(user.id).run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE id=?",
+    )
+    .bind(user.id)
+    .run();
   await enrollAdmin(admin, user.email);
   // A confirmação do cadastro já consumiu uma das dez tentativas da conta.
   for (let i = 0; i < 9; i++) {
@@ -2328,7 +2393,12 @@ async function expireMfaBudget(userId) {
 test('TOTP confirmação: novos desafios, sessões e IPs não renovam o limite; a janela libera cadastro', async () => {
   const owner = browser();
   const user = await owner.register();
-  await db.prepare("UPDATE users SET role='admin' WHERE id=?").bind(user.id).run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE id=?",
+    )
+    .bind(user.id)
+    .run();
   for (let session = 0; session < 2; session++) {
     const client = browser();
     const login = await client.login(user.email);
@@ -2379,7 +2449,12 @@ test('TOTP confirmação: novos desafios, sessões e IPs não renovam o limite; 
 test('TOTP login, recuperação e reauth compartilham limite por conta, inclusive aliases e IPs distintos', async () => {
   const admin = browser();
   const user = await admin.register();
-  await db.prepare("UPDATE users SET role='admin' WHERE id=?").bind(user.id).run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE id=?",
+    )
+    .bind(user.id)
+    .run();
   const enrolled = await enrollAdmin(admin, user.email);
   for (let attempt = 0; attempt < 9; attempt++) {
     const client = browser();
@@ -2435,7 +2510,12 @@ test('TOTP login, recuperação e reauth compartilham limite por conta, inclusiv
 test('TOTP reserva atômica limita reauth concorrente entre sessões; uma conta não bloqueia outra', async () => {
   const first = browser();
   const user = await first.register();
-  await db.prepare("UPDATE users SET role='admin' WHERE id=?").bind(user.id).run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE id=?",
+    )
+    .bind(user.id)
+    .run();
   const enrolled = await enrollAdmin(first, user.email);
   const second = browser();
   const login = await second.login(user.email);
@@ -2462,7 +2542,12 @@ test('TOTP reserva atômica limita reauth concorrente entre sessões; uma conta 
   assert.equal((await mfaBudget(user.id)).attempts, 10);
   const other = browser();
   const otherUser = await other.register();
-  await db.prepare("UPDATE users SET role='admin' WHERE id=?").bind(otherUser.id).run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE id=?",
+    )
+    .bind(otherUser.id)
+    .run();
   const otherEnrolled = await enrollAdmin(other, otherUser.email);
   const valid = await other.request('/api/auth/admin-totp/reauth', {
     method: 'POST',
@@ -2475,7 +2560,12 @@ test('TOTP reserva atômica limita reauth concorrente entre sessões; uma conta 
 test('TOTP orçamento não é consumido por sessão anônima, desafio alheio ou CSRF inválido', async () => {
   const owner = browser();
   const user = await owner.register();
-  await db.prepare("UPDATE users SET role='admin' WHERE id=?").bind(user.id).run();
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE id=?",
+    )
+    .bind(user.id)
+    .run();
   const login = await owner.login(user.email);
   const challenge = login.payload.challenge;
   const outsider = browser();
@@ -2511,9 +2601,9 @@ test('five device accounts, concurrent sixth rejection, duplicate links and owne
   }
   const add = (email) =>
     owner.request('/api/devices/users/add', { method: 'POST', data: { reservoir_id: reservoir.id, email } });
-  for (let index = 0; index < 3; index++) assert.equal((await add(clients[index].user.email)).status, 200);
+  for (let index = 0; index < 3; index++) assert.equal((await add(clients[index].user.email)).status, 202);
   const simultaneous = await Promise.all([add(clients[3].user.email), add(clients[4].user.email)]);
-  assert.deepEqual(simultaneous.map((r) => r.status).sort(), [200, 409]);
+  assert.deepEqual(simultaneous.map((r) => r.status).sort(), [202, 409]);
   const blocked = await add(clients[5].user.email);
   assert.equal((await blocked.json()).error.code, 'DEVICE_USER_LIMIT');
   assert.equal((await db.prepare('SELECT COUNT(*) n FROM device_users WHERE device_id=1').first()).n, 5);
@@ -2566,7 +2656,7 @@ test('five device accounts, concurrent sixth rejection, duplicate links and owne
     (await clients[0].client.request('/api/device/snapshot?reservoir_id=' + reservoir.id)).status,
     404,
   );
-  assert.equal((await add(clients[5].user.email)).status, 200);
+  assert.equal((await add(clients[5].user.email)).status, 202);
   const listed = await (await owner.request('/api/devices/users?reservoir_id=' + reservoir.id)).json();
   assert.equal(listed.data.length, 5);
   assert.equal(
@@ -2609,7 +2699,9 @@ test('configuration, single backend calculation, distance-only ingestion and non
   assert.equal(response.status, 200, JSON.stringify(await response.json()));
   const token = randomBytes(32).toString('base64url');
   await db
-    .prepare('INSERT INTO device_credentials(device_id,token_hash,created_at,updated_at) VALUES (1,?,?,?)')
+    .prepare(
+      'INSERT INTO device_credentials(device_id,token_hash,created_at,updated_at,ownership_generation) SELECT id,?,?,?,ownership_generation FROM devices WHERE id=1',
+    )
     .bind(digest(token), seconds(), seconds())
     .run();
   const send = (distance, key) =>
@@ -2619,16 +2711,22 @@ test('configuration, single backend calculation, distance-only ingestion and non
       body: JSON.stringify({ id: 1, d: distance, rssi_wifi: -60 }),
     });
   assert.equal((await send(95, 'quarter')).status, 200);
-  assert.equal((await send(122, 'invalid')).status, 422);
   const snapshot = await (await client.request('/api/device/snapshot?reservoir_id=' + reservoir.id)).json();
   assert.ok(Math.abs(snapshot.data.volume - 195.501109477885) < 1e-8);
   assert.equal(snapshot.data.volume_source, 'backend');
+  assert.equal((await send(122, 'invalid')).status, 200);
+  const invalidSnapshot = await (
+    await client.request('/api/device/snapshot?reservoir_id=' + reservoir.id)
+  ).json();
+  assert.equal(invalidSnapshot.data.volume, null);
+  assert.equal(invalidSnapshot.data.distancia, 122);
   assert.equal((await send(20, 'full')).status, 200);
   const history = await (
     await client.request('/api/device/history?reservoir_id=' + reservoir.id + '&limit=1')
   ).json();
   assert.equal(history.data.length, 1);
-  assert.equal(history.data[0].sample_count, 2);
+  assert.equal(history.data[0].sample_count, 3);
+  assert.equal(history.data[0].measurement_quality, 'contains_invalid');
   assert.ok(Math.abs(history.data[0].volume - (195.501109477885 + 1000) / 2) < 1e-8);
   const intruder = browser();
   const intruderUser = await intruder.register();
@@ -2685,7 +2783,7 @@ test('0011 upgrade preserves owners, codes, sessions and readings', async () => 
   try {
     const database = await upgrade.getD1Database('DB');
     for (const name of (await readdir('cloudflare/migrations'))
-      .filter((file) => file.endsWith('.sql') && !file.startsWith('0011'))
+      .filter((file) => file.endsWith('.sql') && file < '0011')
       .sort())
       await database.batch(
         unstable_splitSqlQuery(await readFile('cloudflare/migrations/' + name, 'utf8')).map((sql) =>

@@ -11,7 +11,8 @@ export class HttpError extends Error {
   }
 }
 export const now = () => Math.floor(Date.now() / 1000);
-export const iso = (value: number | null) => (value === null ? null : new Date(value * 1000).toISOString());
+export const iso = (value: number | null) =>
+  value === null ? null : new Date(Math.round(value * 1000)).toISOString();
 export const json = (value: unknown, status = 200) => Response.json(value, { status });
 export function configInt(value: string | undefined, fallback: number, min: number, max: number): number {
   const n = Number(value ?? fallback);

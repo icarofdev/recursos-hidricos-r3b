@@ -194,7 +194,7 @@ async function loadDevices() {
                     <td><strong>${escapeHTML(dev.mac_address || 'MAC não registrado (legado)')}</strong></td>
                     <td><span class="badge-model ${badgeClass}">${escapeHTML(dev.device_type)}</span></td>
                     <td>${dev.source === 'monitorie' ? (dev.external_id ? 'Telemetria vinculada' : '<span data-tone="admin-tone-2">Telemetria não vinculada</span>') : 'Local'}</td>
-                    <td>${dev.status === 'online' ? '<span data-tone="admin-tone-4">● Online</span>' : '<span data-tone="admin-tone-5">○ Offline</span>'}</td>
+                    <td>${dev.status === 'online' ? '<span data-tone="admin-tone-4">● Online</span>' : dev.status === 'unknown' ? '<span data-tone="admin-tone-5">Comunicação não confirmada</span>' : '<span data-tone="admin-tone-5">○ Offline</span>'}</td>
                     <td>${ownerDisplay}</td>
                     <td>${activeCode}</td>
                     <td><div class="action-buttons">${actions || '—'}</div></td>

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { chromium } from '@playwright/test';
 import { localRuntime } from './local-runtime.mjs';
 import { frontendServer } from './dev-frontend.mjs';
+import { createHmac } from 'node:crypto';
 
 const mac = process.argv[2];
 const model = process.argv[3];
@@ -15,11 +16,32 @@ const origin = 'http://127.0.0.1:8788';
 const password = 'Smoke-Local-42!Hydra';
 let runtime, frontend, browser;
 
+function authenticatorCode(secret) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567',
+    decoded = [];
+  let bits = 0,
+    value = 0;
+  for (const char of secret) {
+    value = (value << 5) | alphabet.indexOf(char);
+    bits += 5;
+    if (bits >= 8) {
+      bits -= 8;
+      decoded.push((value >>> bits) & 255);
+    }
+  }
+  const counter = Buffer.alloc(8);
+  counter.writeUInt32BE(Math.floor(Date.now() / 30000), 4);
+  const hash = createHmac('sha1', Buffer.from(decoded)).update(counter).digest(),
+    offset = hash[19] & 15;
+  return String((hash.readUInt32BE(offset) & 0x7fffffff) % 1000000).padStart(6, '0');
+}
+
 function client(mf) {
   let cookie = '',
-    csrf = '';
+    csrf = '',
+    adminSecret = '';
   return {
-    async request(path, data) {
+    async request(path, data, reauthenticated = false) {
       const response = await mf.dispatchFetch(`http://127.0.0.1:8787${path}`, {
         method: data === undefined ? 'GET' : 'POST',
         headers: {
@@ -33,6 +55,16 @@ function client(mf) {
       for (const item of response.headers.getSetCookie()) cookie = item.split(';')[0];
       const payload = await response.json();
       if (payload.csrf_token) csrf = payload.csrf_token;
+      if (
+        !response.ok &&
+        path.startsWith('/api/admin/') &&
+        payload.error?.code === 'ADMIN_REAUTH_REQUIRED' &&
+        adminSecret &&
+        !reauthenticated
+      ) {
+        await this.request('/api/auth/admin-totp/reauth', { code: authenticatorCode(adminSecret) });
+        return this.request(path, data, true);
+      }
       if (!response.ok) throw new Error(`${path}: ${response.status} ${payload.error?.code || 'UNKNOWN'}`);
       return payload;
     },
@@ -43,6 +75,16 @@ function client(mf) {
         email,
         password,
         password_confirmation: password,
+      });
+    },
+    async enrollAdmin(email) {
+      const login = await this.request('/api/auth/login', { email, password });
+      assert.equal(login.stage, 'totp_setup');
+      const setup = await this.request('/api/auth/admin-totp/setup', { challenge: login.challenge });
+      adminSecret = setup.secret;
+      await this.request('/api/auth/admin-totp/confirm', {
+        challenge: login.challenge,
+        code: authenticatorCode(adminSecret),
       });
     },
   };
@@ -64,7 +106,19 @@ try {
   const adminEmail = `smoke-admin-${Date.now()}@example.test`;
   const customerEmail = `smoke-client-${Date.now()}@example.test`;
   await admin.register(adminEmail);
-  await db.prepare("UPDATE users SET role='admin' WHERE email=?").bind(adminEmail).run();
+  // Synthetic fixture in this hard-coded ephemeral LOCAL DB only. No mailbox
+  // attestation or promotion of an existing production account is performed.
+  await db
+    .prepare(
+      "UPDATE users SET email_verified_at=unixepoch() WHERE email=? AND email LIKE 'smoke-admin-%@example.test'",
+    )
+    .bind(adminEmail)
+    .run();
+  await db
+    .prepare("UPDATE users SET role='admin' WHERE email=? AND email_verified_at IS NOT NULL")
+    .bind(adminEmail)
+    .run();
+  await admin.enrollAdmin(adminEmail);
 
   const created = await admin.request('/api/admin/devices', {
     device_type: model,
@@ -144,8 +198,8 @@ try {
       JSON.stringify(
         {
           telemetry_linked: snapshot.device.telemetry_linked,
-          reading: snapshot.data,
-          dashboard,
+          has_reading: !!snapshot.data,
+          has_dashboard_values: !!dashboard.consumption,
           screenshot: '.runtime/local/monitorie-live-smoke.png',
         },
         null,

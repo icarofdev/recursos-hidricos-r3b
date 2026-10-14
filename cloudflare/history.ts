@@ -1,5 +1,6 @@
 import type { Context, ReservoirRow } from './types';
-import { iso, json, now, queryInt } from './http';
+import { configInt, HttpError, iso, json, now, queryInt } from './http';
+import { assertCurrentAccess } from './db/reservoirs';
 import { remoteHistory } from './monitorie/cache';
 import { telemetryUnits } from './units';
 import { configuredReading } from './reservoir-volume';
@@ -7,19 +8,26 @@ import { configuredReading } from './reservoir-volume';
 export async function history(c: Context, row: ReservoirRow): Promise<Response> {
   const hours = queryInt(c, 'hours', 24, 1, 720),
     limit = queryInt(c, 'limit', 500, 1, 2000);
-  const end = now(),
+  const end = Date.now() / 1000,
     start = Math.max(end - hours * 3600, row.linked_at);
   let data: Record<string, unknown>[];
   let resolution = 0;
   let total = 0;
   if (row.source === 'local') {
     const table = row.device_type === 'SM-WA' ? 'smwa_readings' : 'smwu_readings';
+    const maxSamples = configInt(c.env.HISTORY_MAX_SAMPLES, 10000, 500, 20000);
     const stats = await c.env.DB.prepare(
-      `SELECT COUNT(*) n FROM ${table} WHERE reservoir_id=? AND created_at BETWEEN ? AND ?`,
+      `SELECT COUNT(*) n FROM (SELECT 1 FROM ${table} WHERE reservoir_id=? AND created_at BETWEEN ? AND ? LIMIT ?)`,
     )
-      .bind(row.id, start, end)
+      .bind(row.id, start, end, maxSamples + 1)
       .first<{ n: number }>();
     total = stats?.n ?? 0;
+    if (total > maxSamples)
+      throw new HttpError(
+        422,
+        'HISTORY_WORK_LIMIT',
+        'Reduza a janela do histórico para consultar este volume de leituras.',
+      );
     const fields =
       row.device_type === 'SM-WA'
         ? ['vazao', 'consumo_acumulado', 'volume', 'rssi_wifi']
@@ -27,18 +35,21 @@ export async function history(c: Context, row: ReservoirRow): Promise<Response> 
     // All rows in the requested window participate, never just the newest LIMIT.
     resolution = total > limit ? Math.max(1, Math.ceil((end - start + 1) / limit)) : 0;
     const query = resolution
-      ? `SELECT id,MIN(created_at) created_at,COUNT(*) sample_count,${fields.map((f) => `AVG(${f}) ${f}`).join(',')}
-      FROM ${table} WHERE reservoir_id=? AND created_at BETWEEN ? AND ? GROUP BY CAST((created_at-?)/? AS INTEGER) ORDER BY created_at`
-      : `SELECT * FROM ${table} WHERE reservoir_id=? AND created_at BETWEEN ? AND ? ORDER BY created_at,reading_id`;
+      ? `SELECT id,MIN(created_at) created_at,COUNT(*) sample_count,${fields.map((f) => `AVG(${f}) ${f}`).join(',')}${row.device_type === 'SM-WU' ? ",CASE WHEN COUNT(volume)<COUNT(*) OR COUNT(nivel)<COUNT(*) THEN 'contains_invalid' ELSE 'reported' END measurement_quality" : ''}
+      FROM (SELECT * FROM ${table} WHERE reservoir_id=? AND created_at BETWEEN ? AND ? ORDER BY created_at,reading_id LIMIT ?) GROUP BY CAST((created_at-?)/? AS INTEGER) ORDER BY created_at`
+      : `SELECT * FROM ${table} WHERE reservoir_id=? AND created_at BETWEEN ? AND ? ORDER BY created_at,reading_id LIMIT ?`;
     const stmt = c.env.DB.prepare(query);
     const rows = await (
-      resolution ? stmt.bind(row.id, start, end, start, resolution) : stmt.bind(row.id, start, end)
+      resolution
+        ? stmt.bind(row.id, start, end, maxSamples, start, resolution)
+        : stmt.bind(row.id, start, end, maxSamples)
     ).all<Record<string, unknown>>();
     data = rows.results.map((r) => ({
       id: r.id,
       ...Object.fromEntries(fields.map((f) => [f, r[f]])),
       timestamp: iso(Number(r.created_at)),
       sample_count: r.sample_count ?? 1,
+      ...(row.device_type === 'SM-WU' ? { measurement_quality: r.measurement_quality } : {}),
     }));
     if (row.device_type === 'SM-WU' && row.geometry !== 'reported') {
       // Nonlinear conversion happens per sample BEFORE averaging buckets.
@@ -49,7 +60,7 @@ export async function history(c: Context, row: ReservoirRow): Promise<Response> 
       data = [];
       let cursorTime = start,
         cursorId = 0;
-      for (;;) {
+      for (let pageNumber = 0; pageNumber < Math.ceil(maxSamples / 500) + 1; pageNumber++) {
         const page = await c.env.DB.prepare(
           'SELECT * FROM smwu_readings WHERE reservoir_id=? AND created_at BETWEEN ? AND ? AND (created_at>? OR (created_at=? AND reading_id>?)) ORDER BY created_at,reading_id LIMIT 500',
         )
@@ -103,6 +114,8 @@ export async function history(c: Context, row: ReservoirRow): Promise<Response> 
     total = data.length;
     resolution = row.source === 'mock' ? Math.max(60, Math.ceil((end - start) / Math.max(1, limit - 1))) : 0;
   }
+  await assertCurrentAccess(c, row);
+  data = data.filter((record) => Date.parse(String(record.timestamp)) >= Math.round(row.linked_at * 1000));
   const truncated = row.source === 'monitorie' && data.length >= limit;
   return json({
     success: true,

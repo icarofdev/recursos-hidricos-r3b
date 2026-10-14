@@ -13,37 +13,40 @@ if (command !== 'set-admin' || !email) {
 
 if (!isRemote) {
   const { localRuntime } = await import('./local-runtime.mjs');
-  const { mf, db } = await localRuntime();
+  const { mf, db } = await localRuntime({ skipDevVars: true });
   try {
-    const updated = await db
-      .prepare("UPDATE users SET role='admin' WHERE lower(email)=? RETURNING id, email, role")
-      .bind(email)
-      .first();
+    const results = await db.batch([
+      db
+        .prepare(
+          "UPDATE users SET role='admin' WHERE lower(email)=? AND email_verified_at IS NOT NULL RETURNING id, role",
+        )
+        .bind(email),
+      db
+        .prepare(
+          "INSERT INTO audit_logs(action,device_id,user_id,details,created_at) SELECT 'admin_promoted',NULL,id,json_object('method','cli_bootstrap'),unixepoch() FROM users WHERE lower(email)=? AND email_verified_at IS NOT NULL",
+        )
+        .bind(email),
+    ]);
+    const updated = results[0].results[0];
     if (!updated) {
-      console.error(`Erro: Usuário com e-mail "${email}" não foi encontrado no banco de dados local.`);
+      console.error('Conta ausente ou e-mail não confirmado. Confirme a titularidade antes de promover.');
       console.error('Cadastre-se primeiro em http://127.0.0.1:8788/cadastro e execute o comando novamente.');
-      process.exit(1);
+      process.exitCode = 1;
+    } else {
+      console.log(
+        `Usuário confirmado promovido a admin com sucesso no banco local (ID: ${updated.id}, role: ${updated.role}).`,
+      );
     }
-    await db
-      .prepare(
-        "INSERT INTO audit_logs(action, device_id, user_id, details, created_at) VALUES ('admin_promoted', NULL, ?, json_object('method', 'cli_bootstrap'), unixepoch())",
-      )
-      .bind(updated.id)
-      .run();
-    console.log(
-      `Usuário ${updated.email} promovido a admin com sucesso no banco local (ID: ${updated.id}, role: ${updated.role}).`,
-    );
-    process.exit(0);
   } finally {
     await mf.dispose();
   }
 } else {
   const cli = fileURLToPath(new URL('./wrangler.mjs', import.meta.url));
   const cleanEmail = email.replace(/'/g, "''");
-  const sql = `UPDATE users SET role='admin' WHERE lower(email)='${cleanEmail}' RETURNING id, email, role;
+  const sql = `UPDATE users SET role='admin' WHERE lower(email)='${cleanEmail}' AND email_verified_at IS NOT NULL RETURNING id, role;
 INSERT INTO audit_logs(action, device_id, user_id, details, created_at)
 SELECT 'admin_promoted', NULL, id, json_object('method', 'cli_bootstrap'), unixepoch()
-FROM users WHERE lower(email)='${cleanEmail}';`;
+FROM users WHERE lower(email)='${cleanEmail}' AND email_verified_at IS NOT NULL;`;
   const wranglerArgs = ['d1', 'execute', 'hidra-r3b', '--command', sql, '--json', '--remote'];
 
   const child = spawn(process.execPath, [cli, ...wranglerArgs], {
@@ -64,8 +67,7 @@ FROM users WHERE lower(email)='${cleanEmail}';`;
 
   child.on('exit', (code) => {
     if (code !== 0) {
-      if (stderr.trim()) console.error(stderr);
-      else if (stdout.trim()) console.error(stdout);
+      console.error('Falha na promoção. Confira autenticação, schema e confirmação do e-mail.');
       process.exit(code ?? 1);
     }
 
@@ -73,7 +75,7 @@ FROM users WHERE lower(email)='${cleanEmail}';`;
       const jsonStart = stdout.indexOf('[');
       const jsonEnd = stdout.lastIndexOf(']');
       if (jsonStart === -1 || jsonEnd === -1) {
-        console.error('Falha ao processar resposta do banco D1:\n' + stdout);
+        console.error('Resposta inesperada do banco.');
         process.exit(1);
       }
 
@@ -81,17 +83,17 @@ FROM users WHERE lower(email)='${cleanEmail}';`;
       const results = parsed[0]?.results ?? [];
 
       if (results.length === 0) {
-        console.error(`Erro: Usuário com e-mail "${email}" não foi encontrado no banco de dados remoto.`);
+        console.error('Conta ausente ou e-mail não confirmado. Confirme a titularidade antes de promover.');
         process.exit(1);
       }
 
       const updated = results[0];
       console.log(
-        `Usuário ${updated.email} promovido a admin com sucesso no D1 remoto (ID: ${updated.id}, role: ${updated.role}).`,
+        `Usuário confirmado promovido a admin com sucesso no D1 remoto (ID: ${updated.id}, role: ${updated.role}).`,
       );
       process.exit(0);
-    } catch (err) {
-      console.error('Erro ao interpretar resultado do D1:', err.message);
+    } catch {
+      console.error('Erro ao interpretar resultado do D1.');
       process.exit(1);
     }
   });

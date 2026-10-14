@@ -1,5 +1,5 @@
 import type { Context } from '../types';
-import { now, secret } from '../http';
+import { configInt, now, secret } from '../http';
 import { hmac } from './crypto';
 
 export async function securityEvent(
@@ -21,6 +21,9 @@ export async function securityEvent(
     request_id: c.requestId,
   };
   console.log(JSON.stringify(event));
+  // Successful security transitions are durable; rejected traffic is sampled.
+  const failureSample = configInt(c.env.SECURITY_EVENT_FAILURE_SAMPLE_RATE, 20, 1, 10000);
+  if (result === 'failure' && crypto.getRandomValues(new Uint32Array(1))[0] % failureSample !== 0) return;
   try {
     await c.env.DB.prepare(
       'INSERT INTO security_events(account_id,account_hash,event_type,result,request_id,created_at) VALUES (?,?,?,?,?,?)',

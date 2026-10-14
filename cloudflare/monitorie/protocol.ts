@@ -103,7 +103,7 @@ export function timestampMsToIso(ts: number): string {
   return new Date(ts).toISOString();
 }
 export function secondsToTimestampMs(seconds: number): number {
-  const ts = seconds * 1000;
+  const ts = Math.round(seconds * 1000);
   timestampMsToIso(ts);
   return ts;
 }
@@ -337,7 +337,7 @@ export class MonitorieReadClient {
       endTs: String(endMs),
       limit: String(limit),
       agg: 'NONE',
-      orderBy: 'ASC',
+      orderBy: 'DESC',
       useStrictDataTypes: 'true',
     });
     const series = this.#series(await this.#get(`${path}?${query}`), keys, limit);
@@ -370,18 +370,33 @@ export class MonitorieReadClient {
  * Reserva 10s adicionais para o timeout da chamada; não persiste nenhuma credencial.
  */
 export class D1MonitorieGate implements RequestGate {
-  constructor(private readonly db: D1Database) {}
+  constructor(
+    private readonly db: D1Database,
+    private readonly device?: number,
+  ) {}
   async reserve(): Promise<void> {
+    if (this.device !== undefined)
+      await this.db
+        .prepare(
+          `INSERT INTO monitorie_queue(device_id,requested_at,expires_at) VALUES(?,unixepoch(),unixepoch()+140)
+      ON CONFLICT(device_id) DO UPDATE SET requested_at=CASE WHEN expires_at<=unixepoch() THEN excluded.requested_at ELSE requested_at END,expires_at=excluded.expires_at`,
+        )
+        .bind(this.device)
+        .run();
     const result = await this.db
       .prepare(
         `INSERT INTO settings(key,value,updated_at)
    VALUES ('monitorie:next-request-ms', CAST((unixepoch('now') + 70) * 1000 AS TEXT), unixepoch('now'))
    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
-   WHERE CAST(settings.value AS INTEGER) <= unixepoch('now') * 1000`,
+   WHERE CAST(settings.value AS INTEGER) <= unixepoch('now') * 1000
+   ${this.device === undefined ? '' : 'AND NOT EXISTS(SELECT 1 FROM monitorie_queue q JOIN monitorie_queue me ON me.device_id=? WHERE q.expires_at>unixepoch() AND (q.requested_at<me.requested_at OR (q.requested_at=me.requested_at AND q.device_id<me.device_id)))'}`,
       )
+      .bind(...(this.device === undefined ? [] : [this.device]))
       .run();
     if (result.meta.changes !== 1)
       throw new HttpError(503, 'MONITORIE_RATE_LIMITED', 'Aguarde o intervalo de consulta da MonitorIE.', 70);
+    if (this.device !== undefined)
+      await this.db.prepare('DELETE FROM monitorie_queue WHERE device_id=?').bind(this.device).run();
   }
   async defer(seconds: number): Promise<void> {
     await this.db

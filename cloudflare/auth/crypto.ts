@@ -1,6 +1,7 @@
 import { HttpError, secret } from '../http';
 import type { Env } from '../types';
 import { isCommonPassword } from './common-passwords';
+import { keyId, previousKeyActive } from './key-window';
 
 const encoder = new TextEncoder();
 export function randomToken(bytes = 32): string {
@@ -51,8 +52,11 @@ export function validatePassword(value: string, confirmation: string): void {
 // Pepper obrigatório fora do D1 protege também contra vazamento isolado do banco.
 // Não reduzir o custo para contornar limites de CPU: validar CPU no lançamento.
 const ITERATIONS = 100_000;
-async function derive(password: string, salt: string, env: Env): Promise<string> {
-  const peppered = await hmac(password, secret(env, 'PASSWORD_PEPPER'));
+async function derive(password: string, salt: string, env: Env, previous = false): Promise<string> {
+  const pepper = previous ? env.PASSWORD_PEPPER_PREVIOUS : secret(env, 'PASSWORD_PEPPER');
+  if (!pepper || pepper.length < 32)
+    throw new HttpError(503, 'CONFIGURATION_REQUIRED', 'Serviço ainda não configurado.');
+  const peppered = await hmac(password, pepper);
   const key = await crypto.subtle.importKey('raw', encoder.encode(peppered), 'PBKDF2', false, ['deriveBits']);
   return hex(
     await crypto.subtle.deriveBits(
@@ -64,14 +68,22 @@ async function derive(password: string, salt: string, env: Env): Promise<string>
 }
 export async function hashPassword(password: string, env: Env): Promise<string> {
   const salt = randomToken(16);
-  return `pbkdf2-sha256-pepper$v1$${ITERATIONS}$${salt}$${await derive(password, salt, env)}`;
+  return `pbkdf2-sha256-pepper$v2$${keyId(env.PASSWORD_PEPPER_ID)}$${ITERATIONS}$${salt}$${await derive(password, salt, env)}`;
 }
 export async function verifyPassword(
   password: string,
   stored: string | undefined,
   env: Env,
 ): Promise<boolean> {
-  const parts = stored?.split('$') ?? [];
+  let parts = stored?.split('$') ?? [];
+  const versioned = parts[1] === 'v2' && parts.length === 6;
+  const id = versioned ? parts[2] : null;
+  if (versioned) parts = [parts[0], 'v1', ...parts.slice(3)];
+  const previous =
+    id !== null &&
+    id !== keyId(env.PASSWORD_PEPPER_ID) &&
+    id === env.PASSWORD_PEPPER_PREVIOUS_ID &&
+    previousKeyActive(env.PASSWORD_PEPPER_PREVIOUS_UNTIL);
   const valid =
     parts.length === 5 &&
     parts[0] === 'pbkdf2-sha256-pepper' &&
@@ -79,6 +91,18 @@ export async function verifyPassword(
     parts[2] === String(ITERATIONS) &&
     /^[A-Za-z0-9_-]{22}$/.test(parts[3]) &&
     /^[a-f0-9]{64}$/.test(parts[4]);
-  const result = await derive(password, valid ? parts[3] : 'dummy-salt-for-timing00', env);
-  return valid && equal(result, parts[4]);
+  const recognized = id === null || id === keyId(env.PASSWORD_PEPPER_ID) || previous;
+  const result = await derive(password, valid ? parts[3] : 'dummy-salt-for-timing00', env, previous);
+  if (valid && recognized && equal(result, parts[4])) return true;
+  if (
+    valid &&
+    id === null &&
+    env.PASSWORD_PEPPER_PREVIOUS &&
+    previousKeyActive(env.PASSWORD_PEPPER_PREVIOUS_UNTIL)
+  )
+    return equal(await derive(password, parts[3], env, true), parts[4]);
+  return false;
+}
+export function passwordNeedsUpgrade(stored: string, env: Env): boolean {
+  return !stored.startsWith(`pbkdf2-sha256-pepper$v2$${keyId(env.PASSWORD_PEPPER_ID)}$`);
 }

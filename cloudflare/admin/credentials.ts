@@ -16,9 +16,10 @@ export async function credentialAction(c: Context, deviceId: number, revoke: boo
           deviceId,
         )
       : c.env.DB.prepare(
-          `INSERT INTO device_credentials(device_id,token_hash,created_at,updated_at) VALUES (?,?,?,?)
-    ON CONFLICT(device_id) DO UPDATE SET token_hash=excluded.token_hash,version=version+1,revoked_at=NULL,updated_at=excluded.updated_at`,
-        ).bind(deviceId, hash, time, time),
+          `INSERT INTO device_credentials(device_id,token_hash,created_at,updated_at,ownership_generation)
+           SELECT id,?,?,?,ownership_generation FROM devices WHERE id=?
+     ON CONFLICT(device_id) DO UPDATE SET token_hash=excluded.token_hash,ownership_generation=excluded.ownership_generation,version=version+1,revoked_at=NULL,updated_at=excluded.updated_at`,
+        ).bind(hash, time, time, deviceId),
     auditStatement(c, revoke ? 'credential_revoked' : 'credential_rotated', deviceId),
   ]);
   return json({

@@ -4,7 +4,12 @@ import { randomBytes, createHash } from 'node:crypto';
 export async function promoteUserToAdmin(email) {
   const { db, mf } = await localRuntime({ skipDevVars: true });
   try {
-    await db.prepare("UPDATE users SET role='admin' WHERE lower(email)=lower(?)").bind(email).run();
+    await db
+      .prepare(
+        "UPDATE users SET email_verified_at=COALESCE(email_verified_at,unixepoch()),role='admin' WHERE lower(email)=lower(?)",
+      )
+      .bind(email)
+      .run();
   } finally {
     await mf.dispose();
   }
@@ -26,6 +31,10 @@ export async function createPairingCodeForDevice(deviceCode = 'DEV-PAIR-TEST', d
       .bind(deviceCode, deviceType, hash, time + 86400, time, time)
       .first();
 
+    await db
+      .prepare('INSERT INTO activation_codes(device_id,code_hash,expires_at,created_at) VALUES(?,?,?,?)')
+      .bind(dev.id, hash, time + 86400, time)
+      .run();
     return { deviceId: dev.id, code };
   } finally {
     await mf.dispose();

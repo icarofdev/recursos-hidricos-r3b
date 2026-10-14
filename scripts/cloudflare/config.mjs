@@ -36,6 +36,7 @@ export function configuration(production = false, env = process.env) {
     '/esqueci-senha': 'forgot-password.html',
     '/redefinir-senha': 'reset-password.html',
     '/admin': 'admin.html',
+    '/confirmar-email': 'verify-email.html',
   };
   return { api, app, headers, pages };
 }

@@ -100,7 +100,7 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
       (type !== device.device_type || (device.mac_address !== null && mac !== device.mac_address));
     statements.push(
       c.env.DB.prepare(
-        'UPDATE devices SET device_type=?,mac_address=?,external_id=?,reported_status=?,last_seen=?,updated_at=? WHERE id=?',
+        'UPDATE devices SET device_type=?,mac_address=?,external_id=?,reported_status=?,last_seen=?,updated_at=?,device_code=? WHERE id=?',
       ).bind(
         type,
         mac,
@@ -108,6 +108,7 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
         identityChanged ? 'offline' : device.reported_status,
         identityChanged ? null : device.last_seen,
         time,
+        mac ? codeFromMac(type as DeviceType, mac) : device.device_code,
         deviceId,
       ),
       auditStatement(c, 'device_updated', deviceId, {

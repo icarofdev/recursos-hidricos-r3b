@@ -176,6 +176,13 @@ function renderSystemStatus() {
     return;
   }
 
+  if (dashboardState.device?.status === 'unknown') {
+    container.classList.add('is-warning');
+    title.textContent = 'Comunicação não confirmada';
+    description.textContent =
+      'A leitura disponível pode estar em cache. A integração ainda não confirmou o estado atual do dispositivo.';
+    return;
+  }
   if (dashboardState.device && isDeviceDisconnected()) {
     container.classList.add('is-critical');
     title.textContent = 'Dispositivo offline';
@@ -402,15 +409,19 @@ function renderMetrics() {
         ? 'Não vinculada'
         : device?.status === 'online'
           ? 'Operando'
-          : 'Offline';
+          : device?.status === 'unknown'
+            ? 'Aguardando atualização'
+            : 'Offline';
     getElement('level-state-reading').className =
-      `metric-status ${device?.status === 'online' ? 'is-good' : 'is-critical'}`;
+      `metric-status ${device?.status === 'online' ? 'is-good' : device?.status === 'unknown' ? 'is-warning' : 'is-critical'}`;
     getElement('level-state-context').textContent =
       device?.telemetry_linked === false
         ? 'Telemetria não vinculada à MonitorIE'
         : device?.status === 'online'
           ? 'Comunicação regular SM-WA'
-          : 'Sem sinal recente';
+          : device?.status === 'unknown'
+            ? 'Comunicação ainda não confirmada'
+            : 'Sem sinal recente';
 
     getElement('flow-metric').textContent =
       vazao === null ? '—' : `${formatNumber(vazao, 2)} ${unit('vazao')}`;
@@ -474,11 +485,17 @@ function renderMetrics() {
     getElement('level-state-reading').textContent = levelStatus.shortLabel;
     getElement('level-state-reading').className = `metric-status ${levelStatus.className}`;
     getElement('level-state-context').textContent =
-      level === null
-        ? 'Aguardando telemetria'
-        : level < 40
-          ? 'Requer acompanhamento'
-          : 'Dentro da faixa normal';
+      latest?.measurement_quality === 'out_of_range'
+        ? 'Distância fora da faixa configurada; volume desconhecido'
+        : latest?.measurement_quality === 'configuration_missing'
+          ? 'Confira a configuração da geometria'
+          : latest?.measurement_quality === 'within_tolerance'
+            ? 'Limite ajustado pela tolerância configurada'
+            : level === null
+              ? 'Aguardando telemetria'
+              : level < 40
+                ? 'Requer acompanhamento'
+                : 'Dentro da faixa normal';
 
     getElement('flow-metric').textContent = distance === null ? '—' : `${formatNumber(distance, 2)} cm`;
     getElement('flow-context').textContent =
@@ -727,11 +744,13 @@ function renderDevice() {
     ? 'Indisponível'
     : device?.telemetry_linked === false
       ? 'Telemetria não vinculada'
-      : !device
-        ? 'Sem status'
-        : disconnected
-          ? 'Offline'
-          : 'Online';
+      : device?.status === 'unknown'
+        ? 'Comunicação não confirmada'
+        : !device
+          ? 'Sem status'
+          : disconnected
+            ? 'Offline'
+            : 'Online';
   getElement('devices-count').textContent =
     `${dashboardState.reservoirs.length} ${dashboardState.reservoirs.length === 1 ? 'conectado' : 'conectados'}`;
   getElement('device-name').textContent =
@@ -1323,7 +1342,11 @@ function bindPairing() {
           ? 'Telemetria não vinculada à MonitorIE'
           : online
             ? `Online · última comunicação ${formatElapsed(payload.data.last_seen)}`
-            : `Offline · última comunicação ${formatElapsed(payload.data.last_seen)}`;
+            : payload.data.status === 'unknown'
+              ? 'Comunicação não confirmada'
+              : payload.data.status === 'unknown'
+                ? 'Comunicação não confirmada'
+                : `Offline · última comunicação ${formatElapsed(payload.data.last_seen)}`;
       const isSMWA = payload.data.device_type === 'SM-WA';
       getElement('pairing-name-label').textContent = isSMWA ? 'Nome do equipamento' : 'Nome do reservatório';
       getElement('pairing-reservoir-name').placeholder = isSMWA

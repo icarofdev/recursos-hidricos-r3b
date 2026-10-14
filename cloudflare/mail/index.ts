@@ -7,14 +7,20 @@ export interface TransactionalEmail {
   html: string;
   text: string;
 }
+export function mailConfigured(env: Env): boolean {
+  const from = env.EMAIL_FROM ?? '';
+  return (
+    env.MAIL_MODE === 'resend' &&
+    !!env.RESEND_API_KEY &&
+    (/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(from) ||
+      /^[^<>\r\n]+ <[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+>$/.test(from))
+  );
+}
 
 /** The only outbound transactional email transport used by the Worker. */
 export async function sendEmail(env: Env, message: TransactionalEmail): Promise<void> {
   const from = env.EMAIL_FROM ?? '';
-  const validFrom =
-    /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(from) ||
-    /^[^<>\r\n]+ <[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+>$/.test(from);
-  if (env.MAIL_MODE !== 'resend' || !env.RESEND_API_KEY || !validFrom)
+  if (!mailConfigured(env))
     throw new HttpError(503, 'MAIL_CONFIGURATION', 'Serviço de e-mail ainda não configurado.');
 
   try {

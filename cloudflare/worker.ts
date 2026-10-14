@@ -15,6 +15,9 @@ import { telemetryRoute } from './telemetry';
 import { adminRoute } from './admin/routes';
 import { monitorieAuthConfigured } from './monitorie/auth';
 import { observeEndpoint } from './observability/endpoint-requests';
+import { requireTotpKey } from './auth/totp';
+import { mailConfigured } from './mail';
+import { keyId } from './auth/key-window';
 
 declare const __BUILD_REVISION__: string;
 
@@ -29,6 +32,7 @@ const frontendPages = new Set([
   '/esqueci-senha',
   '/redefinir-senha',
   '/admin',
+  '/confirmar-email',
 ]);
 const pageAliases: Record<string, string> = {
   '/index.php': '/',
@@ -48,6 +52,8 @@ const authRoutes = new Set([
   'forgot-password',
   'reset-password',
   'csrf',
+  'verify-email',
+  'request-email-verification',
   'admin-totp/setup',
   'admin-totp/confirm',
   'admin-totp/verify',
@@ -82,6 +88,8 @@ export default {
     };
     let response: Response;
     try {
+      if (!isLocal(c) && c.url.protocol !== 'https:')
+        throw new HttpError(400, 'HTTPS_REQUIRED', 'Use HTTPS.');
       if (request.method === 'OPTIONS') {
         const origin = request.headers.get('Origin');
         response = new Response(null, {
@@ -108,7 +116,7 @@ export default {
           request_id: c.requestId,
           error: {
             code: known ? error.code : 'SERVICE_UNAVAILABLE',
-            message: known ? error.message : 'Servi�o temporariamente indispon�vel.',
+            message: known ? error.message : 'Serviço temporariamente indisponível.',
           },
         },
         known ? error.status : 503,
@@ -133,7 +141,11 @@ export default {
         duration_ms: duration,
       }),
     );
-    env.METRICS?.writeDataPoint({ blobs: [category, String(response.status)], doubles: [1, duration] });
+    try {
+      env.METRICS?.writeDataPoint({ blobs: [category, String(response.status)], doubles: [1, duration] });
+    } catch {
+      console.warn('METRICS_UNAVAILABLE');
+    }
     ctx.waitUntil(observeEndpoint(c, response.status));
     return secureResponse(response, c);
   },
@@ -153,6 +165,7 @@ export default {
 
 async function route(c: Context): Promise<Response> {
   let path = c.url.pathname;
+  if (path === '/health.php') path = '/api/health';
   if (path.startsWith('/static/'))
     return new Response(null, { status: 302, headers: { Location: frontendOrigin(c) + path } });
   if (path === '/api/health') {
@@ -177,9 +190,16 @@ async function route(c: Context): Promise<Response> {
         !isAllowedOrigin(c, c.env.APP_URL ?? '')
       )
         throw new Error('config');
-      await c.env.DB.prepare('SELECT token_hash FROM device_credentials LIMIT 1').first();
-      const monitorie = (await monitorieAuthConfigured(c.env)) ? 'configured' : 'blocked';
-      return json({ status: 'ready', monitorie });
+      const schema = await c.env.DB.prepare("SELECT value FROM settings WHERE key='schema_version'").first<{
+        value: string;
+      }>();
+      if (schema?.value !== '13') throw new Error('schema');
+      keyId(c.env.PASSWORD_PEPPER_ID);
+      await requireTotpKey(c.env);
+      if (c.env.MAIL_REQUIRED === 'true' && !mailConfigured(c.env)) throw new Error('mail');
+      if (c.env.MONITORIE_MODE === 'live' && !(await monitorieAuthConfigured(c.env)))
+        throw new Error('integration');
+      return json({ status: 'ready' });
     } catch {
       return json({ status: 'not_ready' }, 503);
     }
@@ -201,16 +221,6 @@ async function route(c: Context): Promise<Response> {
   }
   if (path.startsWith('/api/') && path.endsWith('.php')) path = path.slice(0, -4);
   if (path === '/api/reservoirs/index' || path === '/api/reservoirs/') path = '/api/reservoirs';
-  if (path === '/health.php') path = '/api/health';
-  if (path === '/api/health') {
-    method(c, ['GET']);
-    try {
-      await c.env.DB.prepare('SELECT 1').first();
-      return json({ status: 'ok', database: 'connected', timestamp: new Date().toISOString() });
-    } catch {
-      return json({ status: 'degraded', database: 'unavailable' }, 503);
-    }
-  }
   if (path === '/api/auth/delete-account') {
     method(c, ['POST']);
     const user = requireUser(c);
@@ -224,7 +234,7 @@ async function route(c: Context): Promise<Response> {
         c.env.DB.prepare('DELETE FROM users WHERE id=?').bind(user.id),
         auditStatement(c, 'account_deleted', null),
       ]);
-      await securityEvent(c, 'account_delete', 'success', user.id);
+      await securityEvent(c, 'account_delete', 'success');
       await logout(c);
       return json({ success: true, redirect: '/login' });
     } catch (error) {
@@ -240,11 +250,12 @@ async function route(c: Context): Promise<Response> {
     !deviceRoutes.has(path.replace('/api/device/', ''))
   )
     throw new HttpError(404, 'NOT_FOUND', 'Recurso não encontrado.');
-  c.ctx.waitUntil(
-    maintenance(c).catch(() => {
-      console.warn('MAINTENANCE_UNAVAILABLE');
-    }),
-  );
+  if (isLocal(c))
+    c.ctx.waitUntil(
+      maintenance(c).catch(() => {
+        console.warn('MAINTENANCE_UNAVAILABLE');
+      }),
+    );
   if (path.startsWith('/api/auth/') && authRoutes.has(path.slice(10))) return authRoute(c, path.slice(10));
   if (reservoirRoutes.has(path)) return reservoirsRoute(c, path);
   if (path.startsWith('/api/device/') && deviceRoutes.has(path.slice(12)))
@@ -253,6 +264,14 @@ async function route(c: Context): Promise<Response> {
 }
 
 async function sharedAccess(c: Context): Promise<Response | null> {
+  // Sharing is an alternate login, not a replacement of normal authenticated access.
+  if (c.user && !c.session?.read_only) return null;
+  if (c.session?.read_only) return null;
+  if (
+    c.url.pathname.startsWith('/api/auth/') &&
+    !c.request.headers.get('Authorization')?.startsWith('Basic ')
+  )
+    return null;
   if (!c.env.DASHBOARD_SHARE_USERNAME && !c.env.DASHBOARD_SHARE_PASSWORD && !c.env.DASHBOARD_SHARE_USER_EMAIL)
     return null;
   if (!c.env.DASHBOARD_SHARE_USERNAME || !c.env.DASHBOARD_SHARE_PASSWORD || !c.env.DASHBOARD_SHARE_USER_EMAIL)
@@ -277,7 +296,7 @@ async function sharedAccess(c: Context): Promise<Response | null> {
   if (!equal(supplied, expected)) return unauthorized();
   const email = c.env.DASHBOARD_SHARE_USER_EMAIL.trim().toLowerCase();
   const user = await c.env.DB.prepare(
-    'SELECT id,name,email,password_hash,session_version,role FROM users WHERE email=?',
+    'SELECT id,name,email,password_hash,session_version,role,email_verified_at FROM users WHERE email=? AND email_verified_at IS NOT NULL',
   )
     .bind(email)
     .first<User>();

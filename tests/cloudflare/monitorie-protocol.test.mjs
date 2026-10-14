@@ -101,7 +101,7 @@ test('MonitorIE: histórico mantém ms, limita por key e sinaliza possível trun
       assert.equal(q.get('startTs'), String(stamp));
       assert.equal(q.get('endTs'), String(stamp + 1000));
       assert.equal(q.get('agg'), 'NONE');
-      assert.equal(q.get('orderBy'), 'ASC');
+      assert.equal(q.get('orderBy'), 'DESC');
       assert.equal(q.get('limit'), '2');
       return json({
         variavel_teste: [
