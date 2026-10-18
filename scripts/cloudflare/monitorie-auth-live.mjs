@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { build } from 'esbuild';
 import { readDevVars } from './dev-vars.mjs';
 import { localRuntime } from './local-runtime.mjs';
+import { diagnosticEndpoint, diagnosticError, diagnosticSummary } from './diagnostic-output.mjs';
 
 async function load(entry) {
   const result = await build({
@@ -76,20 +77,14 @@ try {
     .filter((event) => event.method === 'POST')
     .map(({ path, status }) => ({ path, status }));
   const gets = events.filter((event) => event.method === 'GET');
-  const readings = Object.fromEntries(
-    Object.entries(series).map(([key, points]) => [
-      key,
-      points.length ? { timestamp: new Date(points[0].ts).toISOString(), value: points[0].value } : null,
-    ]),
-  );
   console.log(
     JSON.stringify(
       {
         authentication,
-        provider_gets: gets.map(({ path, status }) => ({ path, status })),
+        provider_gets: gets.map(({ path, status }) => ({ endpoint: diagnosticEndpoint(path), status })),
         interval_ms: gets[1]?.startedAt - gets[0]?.startedAt,
-        device: { name: selected.name, type: selected.type },
-        readings,
+        device_selected: true,
+        readings: diagnosticSummary('latest', series),
       },
       null,
       2,
@@ -110,14 +105,11 @@ try {
 } catch (error) {
   console.error(
     JSON.stringify({
-      error:
-        typeof error?.code === 'string'
-          ? error.code
-          : error?.message === 'MONITORIE_NO_DEVICES'
-            ? error.message
-            : 'MONITORIE_LIVE_PROBE_FAILED',
-      authentication: events.filter((event) => event.method === 'POST'),
-      transport_errors: transportErrors,
+      error: diagnosticError(error, 'MONITORIE_LIVE_PROBE_FAILED'),
+      authentication: events
+        .filter((event) => event.method === 'POST')
+        .map(({ path, status }) => ({ endpoint: diagnosticEndpoint(path), status })),
+      transport_errors: transportErrors.length,
     }),
   );
   process.exitCode = 1;

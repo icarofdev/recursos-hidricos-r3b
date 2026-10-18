@@ -187,7 +187,7 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
     if (row.device_type !== 'SM-WU')
       throw new HttpError(422, 'INVALID_DEVICE_TYPE', 'Configuração de volume exige sensor de nível SM-WU.');
     await c.env.DB.batch([
-      ownerGuard(c, row),
+      ownerGuard(c, row, true),
       c.env.DB.prepare(
         'UPDATE reservoirs SET installation_type=?,geometry=?,capacity_liters=?,measurement_config=?,updated_at=? WHERE id=?',
       ).bind(
@@ -222,7 +222,7 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
       row.measurement_config ? JSON.parse(row.measurement_config) : null,
     );
     await c.env.DB.batch([
-      ownerGuard(c, row),
+      ownerGuard(c, row, true),
       c.env.DB.prepare(
         'UPDATE reservoirs SET capacity_liters=?,updated_at=? WHERE id=? AND user_id=? AND unlinked_at IS NULL',
       ).bind(capacity, now(), id, user.id),
@@ -344,12 +344,14 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
   }
   throw new HttpError(404, 'NOT_FOUND', 'Recurso não encontrado.');
 }
-function ownerGuard(c: Context, row: ReservoirRow) {
+function ownerGuard(c: Context, row: ReservoirRow, configuration = false) {
   return guard(
     c,
-    'SELECT 1 FROM reservoirs r JOIN devices d ON d.id=r.device_id WHERE r.id=? AND r.user_id=? AND d.owner_user_id=r.user_id AND r.unlinked_at IS NULL',
+    'SELECT 1 FROM reservoirs r JOIN devices d ON d.id=r.device_id WHERE r.id=? AND r.user_id=? AND d.owner_user_id=r.user_id AND r.unlinked_at IS NULL' +
+      (configuration ? ' AND r.configuration_version=?' : ''),
     row.id,
     requireUser(c).id,
+    ...(configuration ? [row.configuration_version] : []),
   );
 }
 function reservoirName(name: string): string {

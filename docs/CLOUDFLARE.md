@@ -2,7 +2,7 @@
 
 Este guia descreve a configuração real do backend no Cloudflare Worker, dos bancos D1 separados e do frontend estático na Vercel. PHP, VPS e MQTT legado não participam deste deploy.
 
-Para schema 13, siga também [a ordem de publicação e recuperação](OPERATIONS.md).
+Para schema 14, siga também [a ordem de publicação e recuperação](OPERATIONS.md).
 Antes de migrations remotas, faça backup e suspenda tráfego conforme esse procedimento.
 
 ## 1. Princípios de segurança
@@ -60,6 +60,7 @@ As migrations versionadas são:
 - `0011_device_memberships_geometry.sql`: membros por dispositivo e configuração geométrica.
 - `0012_security_boundaries.sql`: prova de e-mail, sessões, gerações de acesso/titularidade, códigos e cache.
 - `0013_telemetry_quality.sql`: qualidade da medição, volume/nível nulos quando inválidos e versão 13 do schema.
+- `0014_audit_identity_configuration.sql`: identidades duráveis de dispositivo, eventos legados explicitamente não comprovados e versão otimista da configuração; schema 14.
 
 Depois, consulte `sqlite_master` e o estado de migrations pelos comandos oficiais do Wrangler para confirmar tabelas, índices e triggers. Não altere o schema manualmente.
 
@@ -103,7 +104,7 @@ As configurações não secretas ficam em `[vars]` e `[env.preview.vars]` no `wr
 | `MAIL_REQUIRED`                | `true`                              | `false`                          |
 | `INGEST_ENABLED`               | `false`                             | `false`                          |
 
-`/api/ready` verifica origens, secrets, formato da chave TOTP, schema 13 e configurações das funcionalidades obrigatórias. Não consulta provedores externos. Com `MAIL_REQUIRED=true` e `MAIL_MODE=disabled`, retorna 503 até o operador configurar recuperação e confirmação. `/api/health` é somente liveness.
+`/api/ready` verifica origens, secrets, formato da chave TOTP, schema 14 e configurações das funcionalidades obrigatórias. Não consulta provedores externos. Com `MAIL_REQUIRED=true` e `MAIL_MODE=disabled`, retorna 503 até o operador configurar recuperação e confirmação. `/api/health` é somente liveness.
 
 ### Integrações opcionais
 

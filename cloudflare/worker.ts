@@ -193,7 +193,7 @@ async function route(c: Context): Promise<Response> {
       const schema = await c.env.DB.prepare("SELECT value FROM settings WHERE key='schema_version'").first<{
         value: string;
       }>();
-      if (schema?.value !== '13') throw new Error('schema');
+      if (schema?.value !== '14') throw new Error('schema');
       keyId(c.env.PASSWORD_PEPPER_ID);
       await requireTotpKey(c.env);
       if (c.env.MAIL_REQUIRED === 'true' && !mailConfigured(c.env)) throw new Error('mail');

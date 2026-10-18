@@ -221,7 +221,11 @@ async function loadAudit() {
         const author = log.author
           ? `${escapeHTML(log.author.name)} (${escapeHTML(log.author.email)})`
           : 'Sistema / Anônimo';
-        const device = log.device ? `${escapeHTML(log.device.type)} - ${escapeHTML(log.device.code)}` : '—';
+        const device = log.device
+          ? log.device.code
+            ? `${escapeHTML(log.device.type)} - ${escapeHTML(log.device.code)}`
+            : `Dispositivo #${escapeHTML(log.device.id)}${log.device.legacy_identity_unknown ? ' (identidade histórica não comprovada)' : ' (excluído)'}`
+          : '—';
         const date = new Date(log.created_at).toLocaleString();
         const details = log.details
           ? `<small><code>${escapeHTML(JSON.stringify(log.details))}</code></small>`

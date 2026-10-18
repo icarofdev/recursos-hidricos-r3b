@@ -9,21 +9,20 @@ export async function securityEvent(
   accountId: number | null = null,
   email?: string,
 ): Promise<void> {
+  // Apply the same rejection sample to stdout and D1. Request logs already
+  // record the response; rejected traffic must not create another full stream.
+  const failureSample = configInt(c.env.SECURITY_EVENT_FAILURE_SAMPLE_RATE, 20, 1, 10000);
+  if (result === 'failure' && crypto.getRandomValues(new Uint32Array(1))[0] % failureSample !== 0) return;
   const accountHash = email
     ? await hmac(`security-account\0${email.trim().toLowerCase()}`, secret(c.env, 'SESSION_SECRET'))
     : null;
   const event = {
     event: 'security',
-    account_id: accountId,
-    account_hash: accountHash,
     event_type: eventType,
     result,
     request_id: c.requestId,
   };
   console.log(JSON.stringify(event));
-  // Successful security transitions are durable; rejected traffic is sampled.
-  const failureSample = configInt(c.env.SECURITY_EVENT_FAILURE_SAMPLE_RATE, 20, 1, 10000);
-  if (result === 'failure' && crypto.getRandomValues(new Uint32Array(1))[0] % failureSample !== 0) return;
   try {
     await c.env.DB.prepare(
       'INSERT INTO security_events(account_id,account_hash,event_type,result,request_id,created_at) VALUES (?,?,?,?,?,?)',

@@ -57,13 +57,19 @@ export async function ingest(c: Context): Promise<Response> {
   if (Object.keys(normalized).some((key) => !['id', 'device_type', 'timestamp', ...fields].includes(key)))
     throw invalid();
   const config = await c.env.DB.prepare(
-    'SELECT id,geometry,measurement_config,capacity_liters,linked_at,linked_at_ms,updated_at FROM reservoirs WHERE device_id=? AND unlinked_at IS NULL',
+    'SELECT id,geometry,measurement_config,capacity_liters,linked_at,linked_at_ms,updated_at,configuration_version FROM reservoirs WHERE device_id=? AND unlinked_at IS NULL',
   )
     .bind(id)
     .first<ReservoirRow>();
+  if (!config)
+    throw new HttpError(
+      409,
+      'DEVICE_UNLINKED',
+      'Vincule o dispositivo a um reservatório antes de enviar leituras.',
+    );
   let quality = 'reported';
   if (type === 'SM-WU') {
-    if (config && config.geometry !== 'reported') {
+    if (config.geometry !== 'reported') {
       const distance = normalized.distancia;
       if (
         typeof distance !== 'number' &&
@@ -92,7 +98,7 @@ export async function ingest(c: Context): Promise<Response> {
     )
       throw invalid();
   }
-  if (config && Math.round(timestamp * 1000) < config.linked_at_ms)
+  if (Math.round(timestamp * 1000) < config.linked_at_ms)
     throw new HttpError(422, 'EVENT_BEFORE_LINK', 'A leitura é anterior ao vínculo atual.');
   const values = fields.map((field) => {
     const value = normalized[field];
@@ -151,27 +157,17 @@ export async function ingest(c: Context): Promise<Response> {
       hash,
       device.ownership_generation,
     ),
-    ...(config
-      ? [
-          guard(
-            c,
-            'SELECT 1 FROM reservoirs WHERE id=? AND device_id=? AND unlinked_at IS NULL AND linked_at_ms<=? AND updated_at=? AND geometry=? AND capacity_liters IS ? AND measurement_config IS ?',
-            config.id,
-            id,
-            Math.round(timestamp * 1000),
-            config.updated_at,
-            config.geometry,
-            config.capacity_liters,
-            config.measurement_config,
-          ),
-        ]
-      : [
-          guard(
-            c,
-            'SELECT 1 WHERE NOT EXISTS(SELECT 1 FROM reservoirs WHERE device_id=? AND unlinked_at IS NULL)',
-            id,
-          ),
-        ]),
+    guard(
+      c,
+      'SELECT 1 FROM reservoirs WHERE id=? AND device_id=? AND unlinked_at IS NULL AND linked_at_ms<=? AND configuration_version=? AND geometry=? AND capacity_liters IS ? AND measurement_config IS ?',
+      config.id,
+      id,
+      Math.round(timestamp * 1000),
+      config.configuration_version,
+      config.geometry,
+      config.capacity_liters,
+      config.measurement_config,
+    ),
     c.env.DB.prepare(
       `INSERT INTO ${table}(id,reservoir_id,${fields.join(',')},created_at,event_key,payload_hash${type === 'SM-WU' ? ',measurement_quality' : ''})
    VALUES (?,(SELECT id FROM reservoirs WHERE device_id=? AND unlinked_at IS NULL),${Array(

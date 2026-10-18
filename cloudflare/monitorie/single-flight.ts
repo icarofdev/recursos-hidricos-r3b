@@ -1,4 +1,4 @@
-import type { Context, ReservoirRow } from '../types';
+import type { Context } from '../types';
 import { configInt, HttpError, now } from '../http';
 import { randomToken } from '../auth/crypto';
 
@@ -15,7 +15,7 @@ export async function cachedTelemetry<T>(
   c: Context,
   key: string,
   producer: () => Promise<T>,
-  scope?: ReservoirRow,
+  scope?: { device_id: number; access_user_id: number | null },
 ): Promise<T> {
   const time = now(),
     lease = randomToken();

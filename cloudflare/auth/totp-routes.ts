@@ -4,6 +4,7 @@ import { randomToken, sha256 } from './crypto';
 import { csrf, newSession, requireAdmin } from './sessions';
 import { clientIP, rateLimit, reserveTotpAttempt } from './rate-limit';
 import { securityEvent } from './security-events';
+import { guard } from '../admin/audit';
 import {
   decryptTotp,
   encryptTotp,
@@ -224,15 +225,29 @@ async function totpRouteInner(
     if (step === null) return failure(c, row);
     const existing = await c.env.DB.prepare('SELECT 1 FROM admin_totp WHERE user_id=?').bind(user.id).first();
     if (Boolean(existing) !== (row.stage === 'recovery_setup')) throw invalid();
-    const consumed = await c.env.DB.prepare(
-      'UPDATE admin_totp_challenges SET consumed_at=? WHERE challenge_hash=? AND consumed_at IS NULL AND attempts<5 RETURNING challenge_hash',
-    )
-      .bind(now(), row.challenge_hash)
-      .first();
-    if (!consumed) throw invalid();
     const codes = newRecoveryCodes();
     const time = now();
     const statements = [
+      // Revalidate and consume in the credential transaction. Revocation or
+      // another confirmation cannot race installation after async crypto work,
+      // and maintenance cannot collect a consumed challenge before this commit.
+      guard(
+        c,
+        `SELECT 1 FROM admin_totp_challenges ch JOIN users u ON u.id=ch.user_id
+        WHERE ch.challenge_hash=? AND ch.consumed_at IS NULL AND ch.attempts<5 AND ch.stage=?
+        AND ch.session_hash=? AND ch.expires_at>? AND u.id=? AND u.role='admin'
+        AND u.session_version=?`,
+        row.challenge_hash,
+        row.stage,
+        c.session!.token_hash,
+        time,
+        user.id,
+        row.session_version,
+      ),
+      c.env.DB.prepare('UPDATE admin_totp_challenges SET consumed_at=? WHERE challenge_hash=?').bind(
+        time,
+        row.challenge_hash,
+      ),
       c.env.DB.prepare(
         `INSERT INTO admin_totp(user_id,secret_encrypted,last_used_step,created_at) VALUES (?,?,?,?)
         ON CONFLICT(user_id) DO UPDATE SET secret_encrypted=excluded.secret_encrypted,last_used_step=excluded.last_used_step,created_at=excluded.created_at`,

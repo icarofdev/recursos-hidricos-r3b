@@ -123,10 +123,13 @@ export async function adminRoute(c: Context, path: string): Promise<Response> {
 
     let sql = `
    SELECT a.id, a.action, a.device_id, a.user_id, a.details, a.ip, a.created_at,
-          u.name as user_name, u.email as user_email, d.device_code, d.device_type
+          u.name as user_name, u.email as user_email, d.device_code, d.device_type,
+          identity.identity as device_identity
    FROM audit_logs a
    LEFT JOIN users u ON u.id = a.user_id
-   LEFT JOIN devices d ON d.id = a.device_id
+   LEFT JOIN device_identities identity ON identity.device_id=a.device_id
+    AND a.id>=CAST((SELECT value FROM settings WHERE key='audit:identity-first-id') AS INTEGER)
+   LEFT JOIN devices d ON d.id=identity.device_id
   `;
     const binds: unknown[] = [];
     if (deviceIdParam) {
@@ -144,6 +147,7 @@ export async function adminRoute(c: Context, path: string): Promise<Response> {
         device_id: number | null;
         device_code: string | null;
         device_type: DeviceType | null;
+        device_identity: string | null;
         user_id: number | null;
         user_name: string | null;
         user_email: string | null;
@@ -158,7 +162,15 @@ export async function adminRoute(c: Context, path: string): Promise<Response> {
       data: results.map((row) => ({
         id: row.id,
         action: row.action,
-        device: row.device_id ? { id: row.device_id, code: row.device_code, type: row.device_type } : null,
+        device: row.device_id
+          ? {
+              id: row.device_id,
+              identity: row.device_identity,
+              code: row.device_code,
+              type: row.device_type,
+              legacy_identity_unknown: row.device_identity === null,
+            }
+          : null,
         author: row.user_id ? { id: row.user_id, name: row.user_name, email: row.user_email } : null,
         details: parseAuditDetails(row.details),
         ip: row.ip,

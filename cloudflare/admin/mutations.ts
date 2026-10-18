@@ -23,7 +23,8 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
       throw new HttpError(422, 'INVALID_SOURCE', 'Fonte indisponível neste ambiente.');
     const results = await c.env.DB.batch([
       c.env.DB.prepare(
-        'INSERT INTO devices(device_code,device_type,source,mac_address,created_at,updated_at) VALUES (?,?,?,?,?,?) RETURNING id',
+        `INSERT INTO devices(id,device_code,device_type,source,mac_address,created_at,updated_at)
+         SELECT COALESCE(MAX(device_id),0)+1,?,?,?,?,?,? FROM device_identities RETURNING id`,
       ).bind(code, type, source, mac, time, time),
       c.env.DB.prepare(
         `INSERT INTO audit_logs(action,device_id,user_id,details,created_at)
@@ -62,8 +63,6 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
     device_code: string;
     mac_address: string | null;
     external_id: string | null;
-    reported_status: string;
-    last_seen: number | null;
     owner_user_id: number | null;
     source: string;
   }>();
@@ -100,13 +99,18 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
       (type !== device.device_type || (device.mac_address !== null && mac !== device.mac_address));
     statements.push(
       c.env.DB.prepare(
-        'UPDATE devices SET device_type=?,mac_address=?,external_id=?,reported_status=?,last_seen=?,updated_at=?,device_code=? WHERE id=?',
+        `UPDATE devices SET device_type=?,mac_address=?,external_id=?,
+         reported_status=CASE WHEN ? THEN 'offline' ELSE reported_status END,
+         last_seen=CASE WHEN ? THEN NULL ELSE last_seen END,
+         communication_checked_at=CASE WHEN ? THEN NULL ELSE communication_checked_at END,
+         updated_at=?,device_code=? WHERE id=?`,
       ).bind(
         type,
         mac,
         identityChanged ? null : device.external_id,
-        identityChanged ? 'offline' : device.reported_status,
-        identityChanged ? null : device.last_seen,
+        Number(identityChanged),
+        Number(identityChanged),
+        Number(identityChanged),
         time,
         mac ? codeFromMac(type as DeviceType, mac) : device.device_code,
         deviceId,

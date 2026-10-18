@@ -25,6 +25,12 @@ export interface SMWAAdapter {
 export interface MonitorieAdapter {
   snapshot(scope: TelemetryScope): Promise<Snapshot>;
   history(scope: TelemetryScope, since: number, limit: number): Promise<(Reading | SMWAReading)[]>;
+  historyWithMetadata(scope: TelemetryScope, since: number, limit: number): Promise<TelemetryHistory>;
+}
+
+export interface TelemetryHistory {
+  data: (Reading | SMWAReading)[];
+  possiblyTruncated: boolean;
 }
 
 export interface MonitorieTelemetryClient {
@@ -65,11 +71,7 @@ abstract class ModelAdapter {
     const rows = normalizeMonitorieSeries(series, mapping, scope.deviceId);
     return status(scope, rows.at(-1) ?? null);
   }
-  protected async range(
-    scope: TelemetryScope,
-    since: number,
-    limit: number,
-  ): Promise<(Reading | SMWAReading)[]> {
+  async historyWithMetadata(scope: TelemetryScope, since: number, limit: number): Promise<TelemetryHistory> {
     const mapping = monitorieMapping(this.env, this.type);
     const result = await this.client.history(
       scope.externalId,
@@ -78,7 +80,10 @@ abstract class ModelAdapter {
       Date.now(),
       limit,
     );
-    return normalizeMonitorieSeries(result.series, mapping, scope.deviceId);
+    return {
+      data: normalizeMonitorieSeries(result.series, mapping, scope.deviceId),
+      possiblyTruncated: result.possiblyTruncated,
+    };
   }
 }
 
@@ -90,7 +95,7 @@ export class MonitorieSMWUAdapter extends ModelAdapter implements SMWUAdapter {
     return this.current(scope);
   }
   async history(scope: TelemetryScope, since: number, limit: number): Promise<Reading[]> {
-    return (await this.range(scope, since, limit)) as Reading[];
+    return (await this.historyWithMetadata(scope, since, limit)).data as Reading[];
   }
 }
 
@@ -102,7 +107,7 @@ export class MonitorieSMWAAdapter extends ModelAdapter implements SMWAAdapter {
     return this.current(scope);
   }
   async history(scope: TelemetryScope, since: number, limit: number): Promise<SMWAReading[]> {
-    return (await this.range(scope, since, limit)) as SMWAReading[];
+    return (await this.historyWithMetadata(scope, since, limit)).data as SMWAReading[];
   }
 }
 
@@ -121,5 +126,8 @@ export class MonitorieAPI implements MonitorieAdapter {
   async history(scope: TelemetryScope, since: number, limit: number): Promise<(Reading | SMWAReading)[]> {
     if (scope.deviceType === 'SM-WA') return this.smwa.history(scope, since, limit);
     return this.smwu.history(scope, since, limit);
+  }
+  async historyWithMetadata(scope: TelemetryScope, since: number, limit: number): Promise<TelemetryHistory> {
+    return (scope.deviceType === 'SM-WA' ? this.smwa : this.smwu).historyWithMetadata(scope, since, limit);
   }
 }

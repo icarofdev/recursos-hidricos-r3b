@@ -45,4 +45,7 @@ export class MockMonitorie implements MonitorieAdapter {
     for (let time = end; time >= start && data.length < limit; time -= step) data.push(reading(scope, time));
     return data.reverse();
   }
+  async historyWithMetadata(scope: TelemetryScope, since: number, limit: number) {
+    return { data: await this.history(scope, since, limit), possiblyTruncated: false };
+  }
 }

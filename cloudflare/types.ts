@@ -95,6 +95,7 @@ export interface ReservoirRow {
   installation_type: string;
   geometry: string;
   measurement_config: string | null;
+  configuration_version: number;
   access_linked_at: number;
   access_linked_at_ms: number;
   linked_at_ms: number;

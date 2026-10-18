@@ -119,8 +119,9 @@ async function requestJson(
   await gate.reserve();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMilliseconds);
+  let response: Response | undefined;
   try {
-    const response = await transport(
+    response = await transport(
       new Request(MONITORIE_ORIGIN + path, { ...init, redirect: 'manual', signal: controller.signal }),
     );
     if (response.status === 429) {
@@ -174,6 +175,7 @@ async function requestJson(
         chunks.push(part.value);
       }
     } finally {
+      await reader.cancel().catch(() => {});
       reader.releaseLock();
     }
     const bytes = new Uint8Array(length);
@@ -190,6 +192,7 @@ async function requestJson(
     throw new HttpError(503, 'MONITORIE_UNAVAILABLE', 'MonitorIE temporariamente indisponível.');
   } finally {
     clearTimeout(timer);
+    if (response?.body && !response.body.locked) await response.body.cancel().catch(() => {});
   }
 }
 

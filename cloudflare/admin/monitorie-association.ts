@@ -40,9 +40,9 @@ export async function discoverMonitorie(c: Context, deviceId: number): Promise<R
   if (row.external_id) return json({ success: true, status: 'linked' });
 
   const key = `monitorie:discovery:${deviceId}`;
-  const stored = await c.env.DB.prepare('SELECT value FROM settings WHERE key=?')
+  const stored = await c.env.DB.prepare('SELECT value,updated_at FROM settings WHERE key=?')
     .bind(key)
-    .first<{ value: string }>();
+    .first<{ value: string; updated_at: number }>();
   let scan: Scan | null = null;
   if (stored) {
     try {
@@ -51,7 +51,13 @@ export async function discoverMonitorie(c: Context, deviceId: number): Promise<R
       /* Restart corrupt progress. */
     }
   }
-  if (!scan || scan.mac !== row.mac_address || scan.started + 86400 < now() || !Array.isArray(scan.devices))
+  if (
+    !scan ||
+    scan.mac !== row.mac_address ||
+    !stored ||
+    stored.updated_at + 86400 < now() ||
+    !Array.isArray(scan.devices)
+  )
     scan = {
       mac: row.mac_address,
       page: 0,
@@ -75,6 +81,16 @@ export async function discoverMonitorie(c: Context, deviceId: number): Promise<R
             : 'O MAC não apareceu na telemetria dos dispositivos acessíveis.',
         });
       const match = scan.matches[0];
+      if (
+        !Number.isSafeInteger(match.ts) ||
+        match.ts < Date.now() - MAX_MAC_AGE_MS ||
+        match.ts > Date.now() + 60000
+      )
+        return json({
+          success: true,
+          status: 'unlinked',
+          reason: 'A evidência de MAC é inválida ou expirou. Inicie uma nova descoberta.',
+        });
       if (match.type !== row.device_type)
         return json({
           success: true,

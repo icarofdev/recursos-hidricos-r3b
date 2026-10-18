@@ -2156,7 +2156,7 @@ test('cadastro não enumera conta, não cria sessão e não exige confirmação 
   assert.equal((await first.login(email)).res.status, 200);
 });
 
-test('limite por e-mail vale entre IPs e expira sem ser prorrogado por recusas', async () => {
+test('limite por e-mail vale para falhas entre IPs sem bloquear a senha correta', async () => {
   const owner = browser();
   await owner.register('conta-limitada@example.test');
   const attacker = browser();
@@ -2171,7 +2171,7 @@ test('limite por e-mail vale entre IPs e expira sem ser prorrogado por recusas',
   }
   const denied = await attacker.request('/api/auth/login', {
     method: 'POST',
-    data: { email: 'conta-limitada@example.test', password },
+    data: { email: 'conta-limitada@example.test', password: 'errada' },
     headers: { 'CF-Connecting-IP': '203.0.113.99' },
   });
   assert.equal(denied.status, 429);
@@ -2187,7 +2187,7 @@ test('limite por e-mail vale entre IPs e expira sem ser prorrogado por recusas',
   assert.equal(before.attempts, 10);
   const deniedAgain = await attacker.request('/api/auth/login', {
     method: 'POST',
-    data: { email: 'conta-limitada@example.test', password },
+    data: { email: 'conta-limitada@example.test', password: 'errada' },
     headers: { 'CF-Connecting-IP': '203.0.113.100' },
   });
   assert.equal(deniedAgain.status, 429);
@@ -2196,11 +2196,8 @@ test('limite por e-mail vale entre IPs e expira sem ser prorrogado por recusas',
     .bind(key)
     .first();
   assert.deepEqual(after, before);
-  await db
-    .prepare('UPDATE rate_limits SET expires_at=? WHERE key_hash=?')
-    .bind(seconds() - 1, key)
-    .run();
   assert.equal((await attacker.login('conta-limitada@example.test')).res.status, 200);
+  assert.equal(await db.prepare('SELECT 1 FROM rate_limits WHERE key_hash=?').bind(key).first(), null);
 });
 
 test('política usa caracteres Unicode e rejeita senhas comuns em cadastro e reset', async () => {

@@ -101,10 +101,13 @@ export async function authRoute(c: Context, route: string): Promise<Response> {
     try {
       await rateLimit(c, 'login-ip', ip, isLocal(c) ? 200 : 20, 900);
       await rateLimit(c, 'login-identity', `${ip}|${email}`, 10, 900);
-      await reserveAttempt(c, 'login-account-failure', email, 10, 60);
       user = await c.env.DB.prepare('SELECT * FROM users WHERE email=?').bind(email).first<User>();
       const valid = await verifyPassword(password, user?.password_hash, c.env);
       if (!user || !valid) {
+        // The account budget limits failures, never a valid password. Reserving it
+        // before verification lets distributed unauthenticated callers lock out
+        // a known account. IP and IP/identity budgets still precede the KDF.
+        await reserveAttempt(c, 'login-account-failure', email, 10, 60);
         throw new HttpError(401, 'INVALID_CREDENTIALS', 'E-mail ou senha inválidos.');
       }
       await clearFailureLimit(c, 'login-account-failure', email);
@@ -197,17 +200,22 @@ async function requestReset(c: Context, email: string): Promise<void> {
   const hash = await sha256(token);
   const time = now();
   const url = resetURL(c.env, token);
-  await c.env.DB.batch([
-    c.env.DB.prepare('UPDATE password_reset_tokens SET used_at=? WHERE user_id=? AND used_at IS NULL').bind(
-      time,
-      user.id,
-    ),
-    c.env.DB.prepare(
-      'INSERT INTO password_reset_tokens(token_hash,user_id,expires_at,created_at) VALUES (?,?,?,?)',
-    ).bind(hash, user.id, time + 1200, time),
-  ]);
+  const inserted = await c.env.DB.prepare(
+    'INSERT INTO password_reset_tokens(token_hash,user_id,expires_at,created_at) SELECT ?,id,?,? FROM users WHERE id=? AND email=? AND password_hash=? AND session_version=?',
+  )
+    .bind(hash, time + 1200, time, user.id, user.email, user.password_hash, user.session_version)
+    .run();
+  if (inserted.meta.changes !== 1) return;
   try {
     await sendPasswordReset(c.env, user.name, user.email, url);
+    // A failed resend must not invalidate the last delivered reset link. Recheck
+    // credentials after delivery, and supersede only proofs issued before this
+    // one so a slow earlier delivery cannot cancel a newer in-flight request.
+    await c.env.DB.prepare(
+      'UPDATE password_reset_tokens SET used_at=? WHERE user_id=? AND used_at IS NULL AND rowid<(SELECT rowid FROM password_reset_tokens issued WHERE issued.token_hash=? AND issued.used_at IS NULL) AND EXISTS(SELECT 1 FROM users WHERE id=? AND email=? AND password_hash=? AND session_version=?)',
+    )
+      .bind(now(), user.id, hash, user.id, user.email, user.password_hash, user.session_version)
+      .run();
   } catch {
     await c.env.DB.prepare('DELETE FROM password_reset_tokens WHERE token_hash=?').bind(hash).run();
     throw new Error('reset unavailable');

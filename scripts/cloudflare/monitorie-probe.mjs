@@ -1,5 +1,6 @@
 import { build } from 'esbuild';
 import { readDevVars } from './dev-vars.mjs';
+import { diagnosticError, diagnosticSummary, readDiagnosticJson } from './diagnostic-output.mjs';
 
 function argument(name, fallback) {
   const index = process.argv.indexOf(`--${name}`);
@@ -19,7 +20,7 @@ function required(name) {
 const command = process.argv[2];
 if (!['devices', 'structure', 'attributes', 'keys', 'latest', 'history'].includes(command)) {
   console.error(
-    'Uso: npm run monitorie:probe -- devices|structure [--page 0] | attributes|keys --device-id ID_DA_LISTA | latest|history --device-id ID_DA_LISTA --keys chave1,chave2',
+    'Uso: npm run monitorie:probe -- devices|structure [--page 0] | attributes|keys --device-id ID_DA_LISTA | latest|history --device-id ID_DA_LISTA --keys chave1,chave2 [--include-sensitive para exibir identificadores/valores privados]',
   );
   process.exitCode = 2;
 } else {
@@ -70,7 +71,7 @@ if (!['devices', 'structure', 'attributes', 'keys', 'latest', 'history'].include
         !response.headers.get('Content-Type')?.includes('application/json')
       )
         throw new Error('Resposta da lista indisponível ou inválida.');
-      const raw = await response.json();
+      const raw = await readDiagnosticJson(response);
       if (!Array.isArray(raw?.data) || raw.data.length > 100) throw new Error('Lista inválida.');
       const macPattern = /^(?:(?:[0-9a-f]{2}:){5}[0-9a-f]{2}|(?:[0-9a-f]{2}-){5}[0-9a-f]{2}|[0-9a-f]{12})$/i;
       const macPaths = (value, path = '', depth = 0) => {
@@ -127,11 +128,15 @@ if (!['devices', 'structure', 'attributes', 'keys', 'latest', 'history'].include
         }
       }
     }
-    console.log(JSON.stringify(result, null, 2));
+    console.log(
+      JSON.stringify(
+        process.argv.includes('--include-sensitive') ? result : diagnosticSummary(command, result),
+        null,
+        2,
+      ),
+    );
   } catch (error) {
-    const code = typeof error?.code === 'string' ? error.code : 'MONITORIE_PROBE_FAILED';
-    const message = error instanceof Error ? error.message : 'Falha controlada na consulta.';
-    console.error(`${code}: ${message}`);
+    console.error(`${diagnosticError(error)}: Falha controlada. Confira opções e configuração privada.`);
     process.exitCode = 1;
   }
 }

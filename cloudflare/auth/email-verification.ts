@@ -2,8 +2,9 @@ import type { Context } from '../types';
 import { body, escapeHTML, HttpError, json, now, string } from '../http';
 import { requireUser } from './sessions';
 import { randomToken, sha256 } from './crypto';
-import { clientIP, rateLimit } from './rate-limit';
-import { resetURL, sendEmail } from '../mail';
+import { clientIP, rateLimit, releaseAttempt, reserveAttempt } from './rate-limit';
+import type { AttemptReservation } from './rate-limit';
+import { MailDeliveryError, resetURL, sendEmail } from '../mail';
 import { securityEvent } from './security-events';
 
 export async function emailVerification(c: Context, route: string): Promise<Response> {
@@ -26,10 +27,18 @@ export async function emailVerification(c: Context, route: string): Promise<Resp
     return json({ success: true, message: 'E-mail confirmado. Você já pode receber novos vínculos.' });
   }
   await body(c, []);
-  await rateLimit(c, 'email-proof-send', String(user.id), 3, 3600);
-  await rateLimit(c, 'email-proof-cooldown', String(user.id), 1, 60);
-  if (user.email_verified_at === null)
-    c.ctx.waitUntil(sendVerification(c).catch(() => console.warn('EMAIL_VERIFICATION_UNAVAILABLE')));
+  if (user.email_verified_at === null) {
+    const reservations = [await reserveAttempt(c, 'email-proof-cooldown', String(user.id), 1, 60)];
+    try {
+      reservations.push(await reserveAttempt(c, 'email-proof-send', String(user.id), 3, 3600));
+    } catch (error) {
+      await releaseAttempt(c, reservations[0]);
+      throw error;
+    }
+    c.ctx.waitUntil(
+      sendVerification(c, reservations).catch(() => console.warn('EMAIL_VERIFICATION_UNAVAILABLE')),
+    );
+  }
   return json(
     {
       success: true,
@@ -38,32 +47,55 @@ export async function emailVerification(c: Context, route: string): Promise<Resp
     202,
   );
 }
-async function sendVerification(c: Context): Promise<void> {
+async function sendVerification(c: Context, reservations: AttemptReservation[]): Promise<void> {
   const user = requireUser(c),
     token = randomToken(),
     hash = await sha256(token),
     time = now();
-  const url = new URL(resetURL(c.env, token));
-  url.pathname = '/confirmar-email';
-  const inserted = await c.env.DB.prepare(
-    'INSERT INTO email_verification_tokens(token_hash,user_id,expires_at,created_at) SELECT ?,id,?,? FROM users WHERE id=? AND email=? AND email_verified_at IS NULL',
-  )
-    .bind(hash, time + 1200, time, user.id, user.email)
-    .run();
-  // The address may have changed since the authenticated request was loaded.
-  // The insert condition and email-change trigger bind proof to that exact address.
-  if (inserted.meta.changes !== 1) return;
+  let attemptedDelivery = false;
   try {
+    const url = new URL(resetURL(c.env, token));
+    url.pathname = '/confirmar-email';
+    const inserted = await c.env.DB.prepare(
+      'INSERT INTO email_verification_tokens(token_hash,user_id,expires_at,created_at) SELECT ?,id,?,? FROM users WHERE id=? AND email=? AND email_verified_at IS NULL',
+    )
+      .bind(hash, time + 1200, time, user.id, user.email)
+      .run();
+    // The address may have changed since the authenticated request was loaded.
+    // The insert condition and email-change trigger bind proof to that exact address.
+    if (inserted.meta.changes !== 1) {
+      await releaseReservations(c, reservations);
+      return;
+    }
+    attemptedDelivery = true;
     await sendEmail(c.env, {
       to: user.email,
       subject: 'Confirme seu e-mail — Hidra R3B',
       html: `<!doctype html><html lang="pt-BR"><body><h1>Confirme seu e-mail no Hidra R3B</h1><p>Entre na mesma conta que solicitou a confirmação.</p><p><a href="${escapeHTML(url.href)}">Confirmar endereço</a></p><p>Este link expira em 20 minutos e só pode ser usado uma vez. Se você não solicitou esta confirmação, ignore a mensagem.</p></body></html>`,
       text: `Confirme o e-mail da sua conta Hidra R3B. Entre na mesma conta para concluir:\n${url.href}\nEste link expira em 20 minutos e só pode ser usado uma vez. Se você não solicitou, ignore.`,
     });
-  } catch {
+    // Preserve the last delivered proof if a resend is rejected or uncertain.
+    // Only a confirmed delivery supersedes it, while still bound to this address.
+    await c.env.DB.prepare(
+      'UPDATE email_verification_tokens SET used_at=? WHERE user_id=? AND used_at IS NULL AND rowid<(SELECT rowid FROM email_verification_tokens issued WHERE issued.token_hash=? AND issued.user_id=? AND issued.used_at IS NULL) AND EXISTS(SELECT 1 FROM users WHERE id=? AND email=? AND email_verified_at IS NULL)',
+    )
+      .bind(now(), user.id, hash, user.id, user.id, user.email)
+      .run();
+  } catch (error) {
     await c.env.DB.prepare('DELETE FROM email_verification_tokens WHERE token_hash=?').bind(hash).run();
+    // A timeout can happen after provider acceptance. Preserve its quota because
+    // delivery is uncertain; only known rejections or no attempt return slots.
+    if (
+      !attemptedDelivery ||
+      (error instanceof HttpError && error.code === 'MAIL_CONFIGURATION') ||
+      (error instanceof MailDeliveryError && error.rejected)
+    )
+      await releaseReservations(c, reservations);
     throw new Error('verification unavailable');
   }
+}
+async function releaseReservations(c: Context, reservations: AttemptReservation[]): Promise<void> {
+  for (const reservation of reservations) await releaseAttempt(c, reservation);
 }
 function invalid() {
   return new HttpError(

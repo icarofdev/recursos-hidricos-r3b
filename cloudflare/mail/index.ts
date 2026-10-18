@@ -7,6 +7,11 @@ export interface TransactionalEmail {
   html: string;
   text: string;
 }
+export class MailDeliveryError extends HttpError {
+  constructor(public readonly rejected: boolean) {
+    super(503, 'MAIL_UNAVAILABLE', 'Serviço de e-mail temporariamente indisponível.');
+  }
+}
 export function mailConfigured(env: Env): boolean {
   const from = env.EMAIL_FROM ?? '';
   return (
@@ -47,10 +52,11 @@ export async function sendEmail(env: Env, message: TransactionalEmail): Promise<
       console.warn(
         JSON.stringify({ event: 'mail_delivery_failed', provider: 'resend', status: response.status }),
       );
-      throw new Error('mail delivery failed');
+      throw new MailDeliveryError(true);
     }
-  } catch {
-    throw new HttpError(503, 'MAIL_UNAVAILABLE', 'Serviço de e-mail temporariamente indisponível.');
+  } catch (error) {
+    if (error instanceof MailDeliveryError) throw error;
+    throw new MailDeliveryError(false);
   }
 }
 

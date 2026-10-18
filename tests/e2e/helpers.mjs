@@ -25,8 +25,8 @@ export async function createPairingCodeForDevice(deviceCode = 'DEV-PAIR-TEST', d
 
     const dev = await db
       .prepare(
-        `INSERT INTO devices(device_code, device_type, source, pairing_code_hash, pairing_expires_at, created_at, updated_at)
-      VALUES (?, ?, 'mock', ?, ?, ?, ?) RETURNING id`,
+        `INSERT INTO devices(id,device_code,device_type,source,pairing_code_hash,pairing_expires_at,created_at,updated_at)
+         SELECT COALESCE(MAX(device_id),0)+1,?,?,'mock',?,?,?,? FROM device_identities RETURNING id`,
       )
       .bind(deviceCode, deviceType, hash, time + 86400, time, time)
       .first();

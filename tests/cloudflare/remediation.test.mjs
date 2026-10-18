@@ -621,7 +621,7 @@ test('ingestion distinguishes quality, events, retransmission, buffered timestam
     assert.equal((await h.ingest(token)).status, 401);
     assert.equal((await h.ingest(await h.credential())).status, 200);
   }));
-test('atomic account budget rejects concurrent login before password work', async () =>
+test('atomic account budget bounds concurrent failed logins without extending the window', async () =>
   withApp(async (h) => {
     const id = await h.user(),
       clients = await Promise.all(Array.from({ length: 12 }, () => h.browser()));
@@ -797,6 +797,9 @@ test('history bounds work, provider queue preserves 70s and operational retentio
       gate2 = new helpers.D1MonitorieGate(h.db, 2);
     await gate1.reserve();
     await assert.rejects(gate2.reserve());
+    // Simulate the queued device waiting through the quota window. Requests
+    // in the same second otherwise correctly use device_id as a tie-breaker.
+    await h.db.prepare('UPDATE monitorie_queue SET requested_at=unixepoch()-10 WHERE device_id=2').run();
     await h.db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
     await assert.rejects(gate1.reserve());
     await gate2.reserve();

@@ -1,4 +1,4 @@
-# Operação e recuperação — schema 13
+# Operação e recuperação — schema 14
 
 Este procedimento é para execução posterior por um operador autorizado. Nenhum backup,
 alarme, DNS, migration remota ou publicação foi ativado pela correção local.
@@ -13,9 +13,10 @@ resolvidas; um deploy manual também exige autorização separada.
 1. Reserve janela de manutenção; registre versão do Worker, versão do frontend e bookmark
    do D1. Mantenha exportação cifrada fora do repositório. Confirme que a restauração foi
    ensaiada e que um administrador dispõe de senha, autenticador e recuperação.
-2. Aplique **0012_security_boundaries.sql** e depois **0013_telemetry_quality.sql** primeiro
-   em banco descartável/staging, depois no ambiente escolhido. Preserve 0001–0011.
-3. Publique Worker e frontend correspondentes ao schema 13. O novo Worker não deve
+2. Aplique **0012_security_boundaries.sql**, **0013_telemetry_quality.sql** e depois
+   **0014_audit_identity_configuration.sql** primeiro em banco descartável/staging, depois
+   no ambiente escolhido. Preserve 0001–0011 e siga a ordem dos arquivos reais.
+3. Publique Worker e frontend correspondentes ao schema 14. O novo Worker não deve
    receber tráfego antes das migrations. Durante a aplicação, bloqueie tráfego de usuários:
    o Worker antigo não implementa todas as novas fronteiras de autorização.
 4. Configure `APP_URL` e `CORS_ORIGINS` com as origens HTTPS reais e exatas.
@@ -35,10 +36,24 @@ resolvidas; um deploy manual também exige autorização separada.
 
 Não execute migrations reversas improvisadas. Depois da migration 0013, valores de
 volume/nível podem ser nulos. Um rollback de código precisa manter as novas fronteiras
-de segurança e suportar o schema 13; voltar ao Worker anterior a 0012 não é rollback
+de segurança e suportar o schema 14; voltar ao Worker anterior a 0012 não é rollback
 seguro. Restaurar dados é uma operação separada, com perda das mudanças posteriores ao
 ponto escolhido. Após restaurar um backup antigo, reaplique e valide as migrations em
 isolamento antes de liberar tráfego.
+
+O schema 14 inclui `device_identities`, um registro permanente mínimo de ID, identidade
+aleatória e data de criação, sem nomes, e-mails, MACs ou leituras. Inclua essa tabela em
+backups e restaurações: seus tombstones impedem reutilizar IDs apagados, inclusive depois
+de expirar a auditoria. A API aloca o próximo ID pelo registro durável; ferramentas de
+provisionamento com IDs explícitos precisam escolher um ID novo. Não apague tombstones
+para fazer uma operação passar. O Worker anterior ao schema 14 não possui esse allocator;
+um rollback apenas de código pode falhar ao cadastrar dispositivos após exclusões.
+
+Eventos anteriores à migration 0014 são apresentados com identidade histórica não
+comprovada. Não se associa o código atual a um evento antigo que pode já ter sofrido
+reutilização de ID. A migration preserva os registros e não tenta reconstruir evidência
+ausente. A configuração do reservatório ganha uma versão monotônica conferida no batch
+da alteração: conflitos retornam 409 e exigem recarregar os valores antes de tentar de novo.
 
 ## Identidade e administradores existentes
 
@@ -209,7 +224,10 @@ necessário; só então libere tráfego. Faça ensaio regular e registre tempo e
 
 ## Limpeza, observação e configuração externa
 
-A limpeza tem lotes e rodadas limitados. Padrão versionado: 2.000 registros por lote,
+A limpeza tem lotes e rodadas limitados. A cadência admite a execução exatamente após
+60 segundos. Um lease de 60 segundos é renovado em cada batch; as escritas e o relatório
+final conferem o token do lease na mesma transação. Um ciclo suspenso que perca o lease
+não pode limpar dados nem sobrescrever o relatório do sucessor. Padrão versionado: 2.000 registros por lote,
 até duas rodadas por minuto por tabela: teto teórico de 5,76 milhões/dia, dependente da
 execução real, quota D1 e duração. Compare com volume previsto e observado, não apenas
 com esse teto. Leituras: 90 dias; auditoria/eventos: 180 dias; contadores: 7 dias;
@@ -217,6 +235,13 @@ códigos de ativação encerrados e recuperações consumidas: 7 dias; descobert
 1 dia; cache velho: até 30 minutos após validade; sessões/desafios/tokens expirados são
 removidos em ciclos limitados. A exclusão remove caches relacionados imediatamente.
 IDs mínimos de auditoria são preservados pelo prazo definido, sem nome/e-mail/IP.
+
+Cada invocação reserva um orçamento conservador de 50 statements SQL, incluindo lease,
+consulta de backlog e relatório final. O backlog de todas as tabelas é consultado em um
+único SELECT. O padrão de duas rodadas é preservado; solicitar três rodadas pode executar
+menos rodadas para encerrar o ciclo com relatório e indicar os dados que ainda restam.
+Esta contagem local não comprova como o plano publicado contabiliza batches nem sua
+quota efetiva; confira os [limites oficiais do D1](https://developers.cloudflare.com/d1/platform/limits/).
 
 Monitorar externamente: readiness 503; ausência de execução bem-sucedida do cron por
 mais de três minutos; `maintenance.backlog=true` em ciclos consecutivos; falhas de mail;

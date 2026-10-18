@@ -40,7 +40,12 @@ export async function clearFailureLimit(c: Context, scope: string, identity: str
  * Neither success, a new challenge, nor recovery resets the fixed window.
  */
 export async function reserveTotpAttempt(c: Context, userId: number): Promise<void> {
-  return reserveAttempt(c, 'admin-mfa-attempt', String(userId), 10, 300);
+  await reserveAttempt(c, 'admin-mfa-attempt', String(userId), 10, 300);
+}
+export interface AttemptReservation {
+  keyHash: string;
+  expiresAt: number;
+  released: boolean;
 }
 export async function reserveAttempt(
   c: Context,
@@ -48,7 +53,7 @@ export async function reserveAttempt(
   identity: string,
   limit: number,
   seconds: number,
-): Promise<void> {
+): Promise<AttemptReservation> {
   const key = await keyFor(c, scope, identity);
   const time = now();
   const reserved = await c.env.DB.prepare(
@@ -57,11 +62,11 @@ export async function reserveAttempt(
  attempts=CASE WHEN rate_limits.expires_at<=? THEN 1 ELSE rate_limits.attempts+1 END,
  expires_at=CASE WHEN rate_limits.expires_at<=? THEN excluded.expires_at ELSE rate_limits.expires_at END
  WHERE rate_limits.expires_at<=? OR rate_limits.attempts<?
- RETURNING attempts`,
+ RETURNING attempts,expires_at`,
   )
     .bind(key, time + seconds, time, time, time, limit)
-    .first();
-  if (reserved) return;
+    .first<{ attempts: number; expires_at: number }>();
+  if (reserved) return { keyHash: key, expiresAt: reserved.expires_at, released: false };
   const row = await c.env.DB.prepare('SELECT expires_at FROM rate_limits WHERE key_hash=?')
     .bind(key)
     .first<{ expires_at: number }>();
@@ -71,6 +76,17 @@ export async function reserveAttempt(
     'Muitas tentativas. Aguarde e tente novamente.',
     Math.max(1, (row?.expires_at ?? time + seconds) - time),
   );
+}
+
+/** Return only this operation's slot, without clearing other deliveries or a newer window. */
+export async function releaseAttempt(c: Context, reservation: AttemptReservation): Promise<void> {
+  if (reservation.released) return;
+  reservation.released = true;
+  await c.env.DB.prepare(
+    'UPDATE rate_limits SET attempts=attempts-1 WHERE key_hash=? AND expires_at=? AND attempts>0',
+  )
+    .bind(reservation.keyHash, reservation.expiresAt)
+    .run();
 }
 
 export async function rateLimit(

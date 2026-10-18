@@ -13,6 +13,7 @@ export async function history(c: Context, row: ReservoirRow): Promise<Response> 
   let data: Record<string, unknown>[];
   let resolution = 0;
   let total = 0;
+  let possiblyTruncated = false;
   if (row.source === 'local') {
     const table = row.device_type === 'SM-WA' ? 'smwa_readings' : 'smwu_readings';
     const maxSamples = configInt(c.env.HISTORY_MAX_SAMPLES, 10000, 500, 20000);
@@ -110,13 +111,15 @@ export async function history(c: Context, row: ReservoirRow): Promise<Response> 
   } else if (row.source === 'monitorie' && row.external_id === null) {
     data = [];
   } else {
-    data = (await remoteHistory(c, row, hours, limit)).map((r) => ({ ...configuredReading(row, r) }));
+    const result = await remoteHistory(c, row, hours, limit);
+    possiblyTruncated = result.possiblyTruncated;
+    data = result.data.map((r) => ({ ...configuredReading(row, r) }));
     total = data.length;
     resolution = row.source === 'mock' ? Math.max(60, Math.ceil((end - start) / Math.max(1, limit - 1))) : 0;
   }
   await assertCurrentAccess(c, row);
   data = data.filter((record) => Date.parse(String(record.timestamp)) >= Math.round(row.linked_at * 1000));
-  const truncated = row.source === 'monitorie' && data.length >= limit;
+  const truncated = possiblyTruncated;
   return json({
     success: true,
     reservoir_id: row.id,

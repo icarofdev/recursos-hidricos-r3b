@@ -1,5 +1,8 @@
 # Correções locais de segurança e confiabilidade — 13/10/2026
 
+> Registro histórico. A revisão e as correções locais de 18/10/2026, incluindo o schema
+> 14 e a nova matriz de cobertura, estão em [SECURITY_REVIEW_2026-10-18.md](SECURITY_REVIEW_2026-10-18.md).
+
 As alterações estão somente na pasta local. Não houve commit, push, merge, deploy,
 migration remota, restauração remota ou envio real de e-mail nesta tarefa. O checkout
 estava limpo ao começar. A referência anterior é `28242de`, com 11 migrations; não foi

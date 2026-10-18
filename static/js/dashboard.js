@@ -113,6 +113,12 @@ function renderConnection() {
     return;
   }
 
+  if (dashboardState.device.status === 'unknown') {
+    setStatusDot(dot, 'is-warning');
+    label.textContent = 'Sem confirmação';
+    return;
+  }
+
   if (isDeviceDisconnected()) {
     setStatusDot(dot, 'is-error');
     label.textContent = 'Offline';
@@ -947,6 +953,8 @@ async function requestJSON(url, { allowNotFound = false, method = 'GET', body = 
       const error = new Error(payload?.error?.message || `Falha HTTP ${response.status}`);
       error.status = response.status;
       error.code = payload?.error?.code || 'REQUEST_FAILED';
+      const retryAfter = Number(response.headers.get('Retry-After'));
+      if (Number.isFinite(retryAfter) && retryAfter > 0) error.retryAfter = Math.min(3600, retryAfter);
       throw error;
     }
     if (payload?.csrf_token) {
@@ -999,6 +1007,7 @@ function resetTelemetryState() {
   dashboardState.currentPage = 1;
   dashboardState.historyLastLoadedAt = 0;
   dashboardState.historyLoadedRangeHours = null;
+  dashboardState.historyRequestPending = true;
   dashboardState.latestError = false;
   dashboardState.statusError = false;
   dashboardState.historyError = false;
@@ -1095,7 +1104,24 @@ async function updateDashboard() {
     dashboardState.historyRequestPending = true;
   const now = Date.now();
   const interval = (getSelectedReservoir()?.device?.request_interval_seconds ?? 70) * 1000;
-  if (now - dashboardState.lastMonitorieRequestStarted < interval) return;
+  const nextRequest = Math.max(
+    dashboardState.lastMonitorieRequestStarted + interval,
+    interval > 0 ? dashboardState.monitorieRetryAt : 0,
+  );
+  if (now < nextRequest) {
+    if (dashboardState.historyRequestPending) {
+      if (dashboardState.deferredRefreshTimer) window.clearTimeout(dashboardState.deferredRefreshTimer);
+      dashboardState.deferredRefreshTimer = window.setTimeout(() => {
+        dashboardState.deferredRefreshTimer = null;
+        void updateDashboard();
+      }, nextRequest - now);
+    }
+    return;
+  }
+  if (dashboardState.deferredRefreshTimer) {
+    window.clearTimeout(dashboardState.deferredRefreshTimer);
+    dashboardState.deferredRefreshTimer = null;
+  }
   dashboardState.updateInProgress = true;
   if (dashboardState.historyRequestPending && dashboardState.device) {
     dashboardState.lastMonitorieRequestStarted = now;
@@ -1106,6 +1132,7 @@ async function updateDashboard() {
     } finally {
       dashboardState.updateInProgress = false;
       renderAll();
+      if (dashboardState.historyRequestPending) void updateDashboard();
     }
     return;
   }
@@ -1126,15 +1153,28 @@ async function updateDashboard() {
     dashboardState.latestError = dashboardState.statusError = dashboardState.alertsError = false;
     const banner = document.querySelector('.demo-banner');
     if (banner) banner.hidden = !value.simulated;
-  } catch {
+  } catch (error) {
+    deferMonitorieRetry(error);
     if (id !== dashboardState.selectedReservoirId) return;
     dashboardState.apiAvailable = false;
     dashboardState.latestError = dashboardState.statusError = dashboardState.alertsError = true;
   } finally {
     dashboardState.updateInProgress = false;
     renderAll();
+    if (
+      dashboardState.historyRequestPending &&
+      (dashboardState.device ||
+        dashboardState.monitorieRetryAt > Date.now() ||
+        id !== dashboardState.selectedReservoirId)
+    )
+      void updateDashboard();
   }
-  if (interval === 0 && dashboardState.historyRequestPending) await updateDashboard();
+}
+
+function deferMonitorieRetry(error) {
+  if (!['MONITORIE_RATE_LIMITED', 'MONITORIE_AUTH_BUSY'].includes(error?.code)) return false;
+  dashboardState.monitorieRetryAt = Date.now() + (error.retryAfter || 70) * 1000;
+  return true;
 }
 
 async function updateHistoryForRange() {
@@ -1171,7 +1211,8 @@ async function updateHistoryForRange() {
     const history = await fetchHistoryData(requestedHours);
     if (
       historyRequestId !== dashboardState.historyRequestId ||
-      requestedReservoir !== dashboardState.selectedReservoirId
+      requestedReservoir !== dashboardState.selectedReservoirId ||
+      requestedHours !== dashboardState.selectedRangeHours
     )
       return;
     dashboardState.history = history.rows;
@@ -1179,9 +1220,11 @@ async function updateHistoryForRange() {
     dashboardState.historyLastLoadedAt = Date.now();
     dashboardState.historyLoadedRangeHours = requestedHours;
   } catch (error) {
+    if (deferMonitorieRetry(error)) dashboardState.historyRequestPending = true;
     if (
       historyRequestId !== dashboardState.historyRequestId ||
-      requestedReservoir !== dashboardState.selectedReservoirId
+      requestedReservoir !== dashboardState.selectedReservoirId ||
+      requestedHours !== dashboardState.selectedRangeHours
     )
       return;
     dashboardState.historyError = true;
@@ -1198,6 +1241,10 @@ async function updateHistoryForRange() {
 }
 
 function clearRefreshTimer() {
+  if (dashboardState.deferredRefreshTimer) {
+    window.clearTimeout(dashboardState.deferredRefreshTimer);
+    dashboardState.deferredRefreshTimer = null;
+  }
   if (dashboardState.refreshTimer) {
     window.clearInterval(dashboardState.refreshTimer);
     dashboardState.refreshTimer = null;

@@ -2,7 +2,7 @@ import { cachedTelemetry } from './single-flight';
 import type { Context, DeviceType, Reading, ReservoirRow, SMWAReading, Snapshot } from '../types';
 import { configInt, HttpError, isLocal, now } from '../http';
 import { sha256 } from '../auth/crypto';
-import { MonitorieAPI, type MonitorieAdapter, type TelemetryScope } from './adapter';
+import { MonitorieAPI, type MonitorieAdapter, type TelemetryHistory, type TelemetryScope } from './adapter';
 import { MockMonitorie } from './mock';
 import { MonitorieAuth } from './auth';
 import { D1MonitorieGate, MonitorieReadClient } from './protocol';
@@ -23,7 +23,7 @@ function scope(c: Context, row: ReservoirRow): TelemetryScope {
     deviceId: row.device_id,
     deviceType: row.device_type,
     externalId: row.external_id ?? '',
-    linkedAt: row.linked_at,
+    linkedAt: row.linked_at_ms / 1000,
     offlineAfterSeconds: configInt(c.env.DEVICE_OFFLINE_AFTER_SECONDS, 90, 5, 86400),
   };
 }
@@ -41,15 +41,18 @@ async function cached<T>(
       row.device_type,
       row.source,
       row.external_id,
-      row.linked_at,
-      row.access_user_id,
-      row.access_generation,
+      row.linked_at_ms,
       row.ownership_generation,
       c.env.MONITORIE_MODE,
+      c.env.MONITORIE_SMWU_MAPPING,
+      c.env.MONITORIE_SMWA_MAPPING,
+      c.env.DEVICE_OFFLINE_AFTER_SECONDS,
       operation,
     ]),
   );
-  return cachedTelemetry(c, id, producer, row);
+  // Cache belongs to the current ownership, not an individual member. Every
+  // response still applies that member's access boundary and rechecks access.
+  return cachedTelemetry(c, id, producer, { device_id: row.device_id, access_user_id: null });
 }
 
 export async function remoteSnapshot(c: Context, row: ReservoirRow): Promise<Snapshot> {
@@ -96,22 +99,31 @@ export async function remoteHistory(
   row: ReservoirRow,
   hours: number,
   limit: number,
-): Promise<(Reading | SMWAReading)[]> {
+): Promise<TelemetryHistory> {
   // Janela arredondada estabiliza chave; filtro final aplica o limite exato do pedido.
   const since = now() - hours * 3600;
   const normalizedHours = [1, 6, 12, 24, 72, 168, 720].find((value) => value >= hours)!;
   const seconds = configInt(c.env.MONITORIE_CACHE_SECONDS, 60, 60, 3600);
   const bucket = Math.floor((now() - normalizedHours * 3600) / seconds) * seconds;
-  const data = await cached(c, row, `history:${normalizedHours}:2000:${bucket}`, async () => {
-    const records = await adapter(c, row).history(scope(c, row), Math.max(bucket, row.linked_at), 2000);
-    if (!Array.isArray(records) || records.length > 2000) throw invalidData();
-    records.forEach((record) => validateReading(record, row.device_id, row.device_type));
-    return records;
+  const result = await cached(c, row, `history:v2:${normalizedHours}:2000:${bucket}`, async () => {
+    const result = await adapter(c, row).historyWithMetadata(
+      scope(c, row),
+      Math.max(bucket, row.linked_at_ms / 1000),
+      2000,
+    );
+    if (
+      !Array.isArray(result.data) ||
+      result.data.length > 2000 ||
+      typeof result.possiblyTruncated !== 'boolean'
+    )
+      throw invalidData();
+    result.data.forEach((record) => validateReading(record, row.device_id, row.device_type));
+    return result;
   });
-  return data
+  const data = result.data
     .filter((record) => Date.parse(record.timestamp) >= Math.max(since, row.linked_at) * 1000)
-    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp))
-    .slice(-limit);
+    .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+  return { data: data.slice(-limit), possiblyTruncated: result.possiblyTruncated || data.length > limit };
 }
 export function validateReading(
   row: Reading | SMWAReading,

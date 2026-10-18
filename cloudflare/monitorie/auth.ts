@@ -186,8 +186,9 @@ export class MonitorieAuth {
   ): Promise<Record<string, unknown> | null> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), AUTH_TIMEOUT_MS);
+    let response: Response | undefined;
     try {
-      const response = await this.transport(
+      response = await this.transport(
         new Request(MONITORIE_ORIGIN + path, {
           method: 'POST',
           redirect: 'manual',
@@ -221,6 +222,7 @@ export class MonitorieAuth {
           chunks.push(part.value);
         }
       } finally {
+        await reader.cancel().catch(() => {});
         reader.releaseLock();
       }
       const data = new Uint8Array(count);
@@ -237,6 +239,7 @@ export class MonitorieAuth {
       throw unavailable();
     } finally {
       clearTimeout(timer);
+      if (response?.body && !response.body.locked) await response.body.cancel().catch(() => {});
     }
   }
   private pair(value: Record<string, unknown>, previousRefresh?: string): TokenPair {

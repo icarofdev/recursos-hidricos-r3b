@@ -9,12 +9,14 @@ const dashboardState = {
   pageSize: 7,
   refreshMilliseconds: 75000,
   refreshTimer: null,
+  deferredRefreshTimer: null,
   elapsedTimer: null,
   historyMeta: null,
   historyVisible: false,
   units: {},
   snapshotLastStarted: new Map(),
   lastMonitorieRequestStarted: 0,
+  monitorieRetryAt: 0,
   lastMonitorieRequestType: null,
   historyRequestPending: false,
   historyError: false,
@@ -182,11 +184,8 @@ function getChronologicalHistory(history = dashboardState.history) {
 }
 
 function getRangeHistory() {
-  const ordered = getChronologicalHistory();
-  if (dashboardState.selectedRangeHours !== 24) return ordered;
-
-  const now = new Date();
-  return ordered.filter((item) => isSameLocalDay(parseDate(item.timestamp), now));
+  // The API already supplies a rolling window; calendar-day metrics use getTodayHistory.
+  return getChronologicalHistory();
 }
 
 function getTodayHistory() {
