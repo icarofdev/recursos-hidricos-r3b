@@ -193,6 +193,85 @@ test('A8/D3: mismatched provider timestamps retain truncation through adapter, c
   });
 });
 
+test('post-review: provider truncation follows the effective member window and output limit', async () => {
+  await withDatabase(async ({ DB, context, seed }) => {
+    const stamp = Date.now() - 1000;
+    const owner = await seed({ linkedAt: (stamp - 100000) / 1000 });
+    const boundary = stamp - 500;
+    await DB.prepare(
+      'INSERT INTO device_users(device_id,user_id,linked_at,access_generation,access_started_ms) VALUES(1,2,?,?,?)',
+    )
+      .bind(Math.floor(boundary / 1000), 'synthetic-recent-member', boundary)
+      .run();
+    const series = Object.fromEntries(
+      ['d', 'level', 'volume', 'rssi'].map((key) => [
+        key,
+        Array.from({ length: 2000 }, (_, index) => ({
+          ts: stamp - index,
+          value: { d: 50, level: 50, volume: 500, rssi: -60 }[key],
+        })),
+      ]),
+    );
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return json(series);
+    };
+    const member = await api.owned(context(2), 1);
+    const request = (user, limit) => context(user, '/api/device/history?reservoir_id=1&limit=' + limit);
+    assert.equal((await (await api.history(request(1, 2000), owner)).json()).meta.truncated, true);
+    const recent = await (await api.history(request(2, 2000), member)).json();
+    assert.equal(recent.count, 501);
+    assert.equal(recent.meta.truncated, false);
+    assert.ok(recent.data.every((r) => Date.parse(r.timestamp) >= boundary));
+    assert.equal((await (await api.history(request(2, 500), member)).json()).meta.truncated, true);
+    const atOldest = { ...member, linked_at: (stamp - 1999) / 1000 };
+    assert.equal((await api.remoteHistory(context(2), atOldest, 24, 2000)).possiblyTruncated, false);
+    assert.equal(calls, 1, 'All windows reuse the raw ownership cache');
+    await DB.prepare('UPDATE telemetry_cache SET payload=?')
+      .bind(JSON.stringify({ data: [], possiblyTruncated: true }))
+      .run();
+    assert.equal(
+      (await api.remoteHistory(context(2), member, 24, 2000)).possiblyTruncated,
+      true,
+      'No complete timestamps cannot prove the effective window is complete',
+    );
+  });
+});
+
+test('post-review: an abandoned queue head yields after gate opening plus 15 seconds', async () => {
+  await withDatabase(async ({ DB, seed }) => {
+    await seed();
+    for (const id of [2, 3])
+      await DB.prepare(
+        "INSERT INTO devices(id,device_code,device_type,source,created_at,updated_at) VALUES(?,?,'SM-WU','monitorie',1,1)",
+      )
+        .bind(id, 'synthetic-' + id)
+        .run();
+    let stamp = 0;
+    const clockDB = {
+      prepare: (sql) => DB.prepare(sql.replace(/unixepoch\('now'\)|unixepoch\(\)/g, String(stamp))),
+    };
+    const gates = [1, 2, 3].map((id) => new api.D1MonitorieGate(clockDB, id));
+    await gates[0].reserve();
+    stamp = 5;
+    await assert.rejects(gates[1].reserve(), errorCode('MONITORIE_RATE_LIMITED'));
+    stamp = 10;
+    await assert.rejects(gates[2].reserve(), errorCode('MONITORIE_RATE_LIMITED'));
+    for (stamp of [69, 70, 84]) await assert.rejects(gates[2].reserve(), errorCode('MONITORIE_RATE_LIMITED'));
+    stamp = 85;
+    await gates[2].reserve();
+    assert.equal(
+      Number(
+        (await DB.prepare("SELECT value FROM settings WHERE key='monitorie:next-request-ms'").first()).value,
+      ),
+      155000,
+    );
+    stamp = 86;
+    await assert.rejects(gates[0].reserve(), errorCode('MONITORIE_RATE_LIMITED'));
+  });
+});
+
 test('A7/A15: owner and member share provider cache but retain millisecond access boundaries', async () => {
   await withDatabase(async ({ DB, context, seed }) => {
     const stamp = Date.now() - 5000;
@@ -315,7 +394,9 @@ test('A7: contention has no negative cache; real failure is bounded; gate serial
     assert.ok(gate.value >= Date.now() + 68000);
     // Fix queue age in the ephemeral database instead of waiting for real quota windows.
     await DB.prepare('UPDATE monitorie_queue SET requested_at=unixepoch()-10 WHERE device_id=3').run();
-    await DB.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
+    await DB.prepare(
+      "UPDATE settings SET value=CAST((unixepoch()-1)*1000 AS TEXT) WHERE key='monitorie:next-request-ms'",
+    ).run();
     await assert.rejects(new api.D1MonitorieGate(DB, 1).reserve(), errorCode('MONITORIE_RATE_LIMITED'));
     await new api.D1MonitorieGate(DB, 3).reserve();
   });

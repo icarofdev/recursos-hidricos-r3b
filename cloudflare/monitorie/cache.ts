@@ -120,10 +120,20 @@ export async function remoteHistory(
     result.data.forEach((record) => validateReading(record, row.device_id, row.device_type));
     return result;
   });
+  const boundary = Math.round(Math.max(since, row.linked_at) * 1000);
   const data = result.data
-    .filter((record) => Date.parse(record.timestamp) >= Math.max(since, row.linked_at) * 1000)
+    .filter((record) => Date.parse(record.timestamp) >= boundary)
     .sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
-  return { data: data.slice(-limit), possiblyTruncated: result.possiblyTruncated || data.length > limit };
+  // The provider returns newest-first bounded series. A complete timestamp at
+  // or before this member's boundary proves its later window was not cut off.
+  const oldest = result.data.reduce(
+    (stamp, record) => Math.min(stamp, Date.parse(record.timestamp)),
+    Infinity,
+  );
+  return {
+    data: data.slice(-limit),
+    possiblyTruncated: (result.possiblyTruncated && oldest > boundary) || data.length > limit,
+  };
 }
 export function validateReading(
   row: Reading | SMWAReading,

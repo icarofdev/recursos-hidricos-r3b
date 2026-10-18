@@ -104,10 +104,14 @@ export async function authRoute(c: Context, route: string): Promise<Response> {
       user = await c.env.DB.prepare('SELECT * FROM users WHERE email=?').bind(email).first<User>();
       const valid = await verifyPassword(password, user?.password_hash, c.env);
       if (!user || !valid) {
-        // The account budget limits failures, never a valid password. Reserving it
-        // before verification lets distributed unauthenticated callers lock out
-        // a known account. IP and IP/identity budgets still precede the KDF.
-        await reserveAttempt(c, 'login-account-failure', email, 10, 60);
+        // This bounded counter is bookkeeping after the KDF, not CPU protection.
+        // Saturation must not change an already verified failure's public status.
+        // IP and IP/identity budgets still reject excessive traffic before the KDF.
+        try {
+          await reserveAttempt(c, 'login-account-failure', email, 10, 60);
+        } catch (error) {
+          if (!(error instanceof HttpError && error.code === 'RATE_LIMIT_EXCEEDED')) throw error;
+        }
         throw new HttpError(401, 'INVALID_CREDENTIALS', 'E-mail ou senha inválidos.');
       }
       await clearFailureLimit(c, 'login-account-failure', email);
@@ -119,6 +123,9 @@ export async function authRoute(c: Context, route: string): Promise<Response> {
           .first<User>();
         if (!updated) throw new HttpError(409, 'AUTH_STATE_CHANGED', 'Reinicie o login.');
         user = updated;
+        // The password-change trigger revoked this account's sessions, including
+        // the one loaded for this request. MFA needs a live pre-auth session.
+        if (user.role === 'admin' && c.session?.user_id === user.id) await newSession(c, null);
       }
       if (user.role === 'admin') {
         const response = await startAdminChallenge(c, user, data.remember === true, data.next);

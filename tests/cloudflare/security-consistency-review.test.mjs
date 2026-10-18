@@ -4,13 +4,15 @@ import { readFile, readdir, mkdtemp, writeFile, unlink, rmdir } from 'node:fs/pr
 import { execFileSync } from 'node:child_process';
 import { resolve, relative, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { build } from 'esbuild';
 import { Miniflare, Log, LogLevel } from 'miniflare';
 import { unstable_splitSqlQuery } from 'wrangler';
 
-const baseline = process.env.HIDRA_CONSISTENCY_BASELINE === '1';
-const baselineCommit = 'eb0b30005a42cf818f8e2a76728f1de1038a141d';
+const postBaseline = process.env.HIDRA_CONSISTENCY_BASELINE_REVISION;
+if (postBaseline && !/^[a-f0-9]{7,40}$/i.test(postBaseline)) throw new Error('Invalid baseline revision');
+const baseline = postBaseline || process.env.HIDRA_CONSISTENCY_BASELINE === '1';
+const baselineCommit = postBaseline ?? 'eb0b30005a42cf818f8e2a76728f1de1038a141d';
 const compiled = await build({
   stdin: {
     contents:
@@ -51,7 +53,7 @@ const seconds = () => Math.floor(Date.now() / 1000);
 const origin = 'https://api.consistency.test';
 const app = 'https://app.consistency.test';
 
-async function fixture(run, through = baseline ? 13 : 14) {
+async function fixture(run, through = baseline && !postBaseline ? 13 : 14) {
   const mf = new Miniflare({
     modules: true,
     script: 'export default {fetch(){return new Response("synthetic-only")}}',
@@ -120,6 +122,60 @@ async function fixture(run, through = baseline ? 13 : 14) {
     await mf.dispose();
   }
 }
+
+test('post-review: demo seed reuses an unowned mock and allocates beyond deleted tombstones', async () => {
+  await fixture(async ({ db }) => {
+    const file = 'scripts/cloudflare/local-db.mjs';
+    const source = postBaseline
+      ? execFileSync('git', ['show', postBaseline + ':' + file], { encoding: 'utf8', windowsHide: true })
+      : await readFile(file, 'utf8');
+    const runSeed = () =>
+      new (Object.getPrototypeOf(async function () {}).constructor)(
+        'localRuntime',
+        'randomBytes',
+        'createHash',
+        'process',
+        'console',
+        source.replace(/^import\s[\s\S]*?;\r?\n/gm, ''),
+      )(
+        async () => ({ db, mf: { dispose: async () => {} } }),
+        randomBytes,
+        createHash,
+        { argv: ['node', file, 'seed'] },
+        { log() {} },
+      );
+    await runSeed();
+    const first = await db.prepare("SELECT id FROM devices WHERE source='mock'").first();
+    await runSeed();
+    assert.equal((await db.prepare("SELECT COUNT(*) n FROM devices WHERE source='mock'").first()).n, 1);
+    await db.prepare('DELETE FROM devices WHERE id=?').bind(first.id).run();
+    await runSeed();
+    const second = await db.prepare("SELECT id FROM devices WHERE source='mock'").first();
+    assert.ok(second.id > first.id);
+    assert.equal((await db.prepare('SELECT COUNT(*) n FROM device_identities').first()).n, 2);
+    assert.equal(
+      (
+        await db
+          .prepare('SELECT COUNT(*) n FROM activation_codes WHERE device_id=? AND revoked_at IS NULL')
+          .bind(second.id)
+          .first()
+      ).n,
+      1,
+    );
+    await db
+      .prepare(
+        'INSERT INTO reservoirs(user_id,device_id,name,linked_at,linked_at_ms,created_at,updated_at) VALUES(1,?,?,?,?,?,?)',
+      )
+      .bind(second.id, 'Synthetic linked demo', seconds(), seconds() * 1000, seconds(), seconds())
+      .run();
+    await assert.rejects(runSeed, /Demonstração já vinculada/);
+    assert.equal(
+      (await db.prepare('SELECT owner_user_id FROM devices WHERE id=?').bind(second.id).first())
+        .owner_user_id,
+      1,
+    );
+  }, 14);
+});
 
 test('audit identity: deletion/recreation never relabels prior events as the new device', async () => {
   await fixture(async ({ db, context, create }) => {

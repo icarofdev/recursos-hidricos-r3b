@@ -630,8 +630,7 @@ test('atomic account budget bounds concurrent failed logins without extending th
         client.request('/api/auth/login', { email: `u${id}@example.test`, password: 'wrong' }),
       ),
     );
-    assert.equal(results.filter((r) => r.status === 401).length, 10);
-    assert.equal(results.filter((r) => r.status === 429).length, 2);
+    assert.equal(results.filter((r) => r.status === 401).length, 12);
     const rows = await h.db.prepare('SELECT attempts FROM rate_limits WHERE attempts=10').all();
     assert.ok(rows.results.length > 0);
   }));
@@ -800,7 +799,11 @@ test('history bounds work, provider queue preserves 70s and operational retentio
     // Simulate the queued device waiting through the quota window. Requests
     // in the same second otherwise correctly use device_id as a tie-breaker.
     await h.db.prepare('UPDATE monitorie_queue SET requested_at=unixepoch()-10 WHERE device_id=2').run();
-    await h.db.prepare("UPDATE settings SET value='0' WHERE key='monitorie:next-request-ms'").run();
+    await h.db
+      .prepare(
+        "UPDATE settings SET value=CAST((unixepoch()-1)*1000 AS TEXT) WHERE key='monitorie:next-request-ms'",
+      )
+      .run();
     await assert.rejects(gate1.reserve());
     await gate2.reserve();
     assert.ok(

@@ -516,6 +516,11 @@ function renderMetrics() {
     getElement('device-state-context').textContent = latest
       ? 'Leitura recebida sem estado associado'
       : 'Aguardando comunicação';
+  } else if (device.status === 'unknown') {
+    getElement('device-state-reading').textContent = 'Sem confirmação';
+    getElement('device-state-context').textContent = lastSeen
+      ? `Último contato ${formatElapsed(lastSeen)}`
+      : 'Comunicação não confirmada';
   } else if (isDeviceDisconnected()) {
     getElement('device-state-reading').textContent = 'Offline';
     getElement('device-state-context').textContent = lastSeen
@@ -769,12 +774,14 @@ function renderDevice() {
     getElement('device-dot'),
     dashboardState.statusError || (disconnected && device?.telemetry_linked !== false)
       ? 'is-error'
-      : device
-        ? ''
-        : 'is-waiting',
+      : device?.status === 'unknown'
+        ? 'is-warning'
+        : device
+          ? ''
+          : 'is-waiting',
   );
   statusBadge.className =
-    `device-status-badge ${dashboardState.statusError || disconnected ? 'is-waiting' : ''}`.trim();
+    `device-status-badge ${dashboardState.statusError || disconnected || device?.status === 'unknown' ? 'is-waiting' : ''}`.trim();
   const isSMWA = reservoir?.device?.type === 'SM-WA';
   const typeLabel = isSMWA ? 'Medidor de água / hidrômetro SM-WA' : 'Medidor de nível ultrassônico SM-WU';
   const deviceTypeEl = getElement('device-type');
@@ -1382,7 +1389,13 @@ function bindPairing() {
       const online = payload.data.status === 'online';
       setStatusDot(
         getElement('pairing-device-dot'),
-        payload.data.telemetry_linked === false ? 'is-waiting' : online ? '' : 'is-error',
+        payload.data.telemetry_linked === false
+          ? 'is-waiting'
+          : payload.data.status === 'unknown'
+            ? 'is-warning'
+            : online
+              ? ''
+              : 'is-error',
       );
       getElement('pairing-device-status').textContent =
         payload.data.telemetry_linked === false
@@ -1391,9 +1404,7 @@ function bindPairing() {
             ? `Online · última comunicação ${formatElapsed(payload.data.last_seen)}`
             : payload.data.status === 'unknown'
               ? 'Comunicação não confirmada'
-              : payload.data.status === 'unknown'
-                ? 'Comunicação não confirmada'
-                : `Offline · última comunicação ${formatElapsed(payload.data.last_seen)}`;
+              : `Offline · última comunicação ${formatElapsed(payload.data.last_seen)}`;
       const isSMWA = payload.data.device_type === 'SM-WA';
       getElement('pairing-name-label').textContent = isSMWA ? 'Nome do equipamento' : 'Nome do reservatório';
       getElement('pairing-reservoir-name').placeholder = isSMWA

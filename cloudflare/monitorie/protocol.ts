@@ -386,13 +386,15 @@ export class D1MonitorieGate implements RequestGate {
         )
         .bind(this.device)
         .run();
+    // Queue priority lasts only 15 seconds after the global window opens. An
+    // abandoned head cannot idle the provider for the queue's full 140s TTL.
     const result = await this.db
       .prepare(
         `INSERT INTO settings(key,value,updated_at)
    VALUES ('monitorie:next-request-ms', CAST((unixepoch('now') + 70) * 1000 AS TEXT), unixepoch('now'))
    ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at
    WHERE CAST(settings.value AS INTEGER) <= unixepoch('now') * 1000
-   ${this.device === undefined ? '' : 'AND NOT EXISTS(SELECT 1 FROM monitorie_queue q JOIN monitorie_queue me ON me.device_id=? WHERE q.expires_at>unixepoch() AND (q.requested_at<me.requested_at OR (q.requested_at=me.requested_at AND q.device_id<me.device_id)))'}`,
+   ${this.device === undefined ? '' : 'AND NOT EXISTS(SELECT 1 FROM monitorie_queue q JOIN monitorie_queue me ON me.device_id=? WHERE q.expires_at>unixepoch() AND unixepoch()*1000<CAST(settings.value AS INTEGER)+15000 AND (q.requested_at<me.requested_at OR (q.requested_at=me.requested_at AND q.device_id<me.device_id)))'}`,
       )
       .bind(...(this.device === undefined ? [] : [this.device]))
       .run();

@@ -78,6 +78,7 @@ export async function startAdminChallenge(
     stage: stage === 'setup' ? 'totp_setup' : 'totp',
     challenge: token,
     expires_in: 300,
+    csrf_token: session.csrf_token,
   });
 }
 

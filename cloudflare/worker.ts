@@ -208,9 +208,6 @@ async function route(c: Context): Promise<Response> {
   if (c.env.MONITORIE_MODE === 'mock' && !isLocal(c))
     throw new HttpError(503, 'INVALID_ENVIRONMENT', 'Configuração de ambiente inválida.');
   if (!isLocal(c) && c.url.protocol !== 'https:') throw new HttpError(400, 'HTTPS_REQUIRED', 'Use HTTPS.');
-  await loadSession(c);
-  const share = path === '/api/device/ingest' ? null : await sharedAccess(c);
-  if (share) return share;
   if (pageAliases[path] || frontendPages.has(path)) {
     method(c, ['GET', 'HEAD']);
     const target = pageAliases[path] || path;
@@ -219,6 +216,9 @@ async function route(c: Context): Promise<Response> {
       headers: { Location: frontendOrigin(c) + target + c.url.search },
     });
   }
+  await loadSession(c);
+  const share = path === '/api/device/ingest' ? null : await sharedAccess(c);
+  if (share) return share;
   if (path.startsWith('/api/') && path.endsWith('.php')) path = path.slice(0, -4);
   if (path === '/api/reservoirs/index' || path === '/api/reservoirs/') path = '/api/reservoirs';
   if (path === '/api/auth/delete-account') {
@@ -267,11 +267,9 @@ async function sharedAccess(c: Context): Promise<Response | null> {
   // Sharing is an alternate login, not a replacement of normal authenticated access.
   if (c.user && !c.session?.read_only) return null;
   if (c.session?.read_only) return null;
-  if (
-    c.url.pathname.startsWith('/api/auth/') &&
-    !c.request.headers.get('Authorization')?.startsWith('Basic ')
-  )
-    return null;
+  // Only an explicit Basic login opts into sharing. Expired ordinary sessions
+  // must receive the API's JSON 401, without a browser Basic-auth challenge.
+  if (!/^Basic /i.test(c.request.headers.get('Authorization') ?? '')) return null;
   if (!c.env.DASHBOARD_SHARE_USERNAME && !c.env.DASHBOARD_SHARE_PASSWORD && !c.env.DASHBOARD_SHARE_USER_EMAIL)
     return null;
   if (!c.env.DASHBOARD_SHARE_USERNAME || !c.env.DASHBOARD_SHARE_PASSWORD || !c.env.DASHBOARD_SHARE_USER_EMAIL)

@@ -52,16 +52,16 @@ test('A23: rolling 24h chart retains yesterday while calendar-day metrics remain
   }
 });
 
-async function dashboardHarness() {
+async function dashboardHarness({ presentation = false } = {}) {
   const source = await publicSource('static/js/dashboard.js');
   const compiled = await build({
     stdin: {
       contents:
         source +
         `
-        renderAll = () => {}; renderMetrics = () => {}; renderInsights = () => {};
+        renderAll = () => {}; ${presentation ? '' : 'renderMetrics = () => {};'} renderInsights = () => {};
         renderHistoryTable = () => {}; renderSystemStatus = () => {};
-        globalThis.reviewHooks = {dashboardState, updateDashboard, clearRefreshTimer, renderConnection};`,
+        globalThis.reviewHooks = {dashboardState, updateDashboard, clearRefreshTimer, renderConnection, renderMetrics, renderDevice, bindPairing};`,
       resolveDir: resolve('static/js'),
       loader: 'js',
     },
@@ -94,7 +94,18 @@ async function dashboardHarness() {
   const elements = new Map();
   const element = (id) => {
     if (!elements.has(id))
-      elements.set(id, { hidden: false, textContent: '', classList: { add() {}, remove() {} } });
+      elements.set(id, {
+        hidden: false,
+        textContent: '',
+        value: '',
+        classList: { add() {}, remove() {} },
+        setAttribute() {},
+        focus() {},
+        handlers: {},
+        addEventListener(event, handler) {
+          this.handlers[event] = handler;
+        },
+      });
     return elements.get(id);
   };
   const document = {
@@ -250,9 +261,32 @@ test('A10: provider contention schedules Retry-After; permanent initial failures
 });
 
 test('unknown MonitorIE status is never rendered as an Online connection', async () => {
-  const { hooks, document } = await dashboardHarness();
-  hooks.dashboardState.device = { id: 1, status: 'unknown', last_seen: null };
-  hooks.renderConnection();
-  assert.equal(document.getElementById('connection-label').textContent, 'Sem confirmação');
-  assert.match(document.getElementById('connection-dot').className, /is-warning/);
+  const { hooks, document, setResponse } = await dashboardHarness({ presentation: true });
+  for (const type of ['SM-WU', 'SM-WA']) {
+    hooks.dashboardState.reservoirs[0].device.type = type;
+    for (const last_seen of [null, new Date(1800000000000 - 60000).toISOString()]) {
+      hooks.dashboardState.device = { id: 1, status: 'unknown', last_seen };
+      hooks.renderConnection();
+      hooks.renderMetrics();
+      hooks.renderDevice();
+      assert.equal(document.getElementById('connection-label').textContent, 'Sem confirmação');
+      assert.match(document.getElementById('connection-dot').className, /is-warning/);
+      assert.equal(document.getElementById('device-state-reading').textContent, 'Sem confirmação');
+      assert.doesNotMatch(document.getElementById('device-state-context').textContent, /Comunicação ativa/);
+      assert.match(document.getElementById('device-dot').className, /is-warning/);
+      assert.match(document.getElementById('device-status-badge').className, /is-waiting/);
+    }
+  }
+  hooks.bindPairing();
+  document.getElementById('pairing-code').value = 'SYNTHETIC';
+  document.getElementById('pairing-mac').value = '02:00:00:00:00:01';
+  setResponse(() => Response.json({ success: true, data: { status: 'unknown', device_type: 'SM-WU' } }));
+  const button = {};
+  await document.getElementById('pairing-code-form').handlers.submit({
+    preventDefault() {},
+    currentTarget: { querySelector: () => button },
+  });
+  assert.equal(document.getElementById('pairing-code-feedback').textContent, '');
+  assert.match(document.getElementById('pairing-device-dot').className, /is-warning/);
+  assert.equal(document.getElementById('pairing-device-status').textContent, 'Comunicação não confirmada');
 });

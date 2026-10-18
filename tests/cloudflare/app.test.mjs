@@ -802,8 +802,8 @@ test('compartilhamento Basic preserva leitura e impede mutação/reuso do cookie
   });
   const viewer = browser();
   const challenge = await viewer.request('/');
-  assert.equal(challenge.status, 401);
-  assert.match(challenge.headers.get('WWW-Authenticate'), /Basic/);
+  assert.equal(challenge.status, 302);
+  assert.equal(challenge.headers.get('WWW-Authenticate'), null);
   const header = { Authorization: 'Basic ' + Buffer.from('viewer:' + sharePassword).toString('base64') };
   const sharedRes = await viewer.request('/', { headers: header });
   assert.equal(sharedRes.status, 302);
@@ -2055,16 +2055,19 @@ test('Basic sharing bounds headers, rate limits and never reveals which credenti
   });
   const client = browser();
   for (const value of ['viewer:wrong', 'wrong:fake-password', ':', 'x'.repeat(2049)]) {
-    const response = await client.request('/', {
+    const response = await client.request('/api/reservoirs', {
       headers: {
-        Authorization: value.length > 2048 ? value : 'Basic ' + Buffer.from(value).toString('base64'),
+        Authorization: 'Basic ' + Buffer.from(value).toString('base64'),
       },
     });
     assert.equal(response.status, 401);
     assert.equal(await response.text(), 'Acesso restrito.');
   }
   let last;
-  for (let i = 0; i < 31; i++) last = await client.request('/');
+  for (let i = 0; i < 31; i++)
+    last = await client.request('/api/reservoirs', {
+      headers: { Authorization: 'Basic invalid' },
+    });
   assert.equal(last.status, 429);
 });
 test('request ID is generated server-side and attached on success and errors', async () => {
@@ -2174,9 +2177,8 @@ test('limite por e-mail vale para falhas entre IPs sem bloquear a senha correta'
     data: { email: 'conta-limitada@example.test', password: 'errada' },
     headers: { 'CF-Connecting-IP': '203.0.113.99' },
   });
-  assert.equal(denied.status, 429);
-  const wait = Number(denied.headers.get('Retry-After'));
-  assert.ok(wait >= 1 && wait <= 60);
+  assert.equal(denied.status, 401);
+  assert.equal(denied.headers.get('Retry-After'), null);
   const key = createHmac('sha256', keys.SESSION_SECRET)
     .update('login-account-failure\0conta-limitada@example.test')
     .digest('hex');
@@ -2190,7 +2192,7 @@ test('limite por e-mail vale para falhas entre IPs sem bloquear a senha correta'
     data: { email: 'conta-limitada@example.test', password: 'errada' },
     headers: { 'CF-Connecting-IP': '203.0.113.100' },
   });
-  assert.equal(deniedAgain.status, 429);
+  assert.equal(deniedAgain.status, 401);
   const after = await db
     .prepare('SELECT attempts,expires_at FROM rate_limits WHERE key_hash=?')
     .bind(key)

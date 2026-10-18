@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { readFile, readdir } from 'node:fs/promises';
 import { build } from 'esbuild';
 import { Miniflare, Log, LogLevel } from 'miniflare';
@@ -543,4 +544,124 @@ test('operations documentation names migrations that exist in the checkout', asy
   const files = new Set(await readdir('cloudflare/migrations'));
   for (const [, migration] of doc.matchAll(/\*\*(\d{4}_[a-z_]+\.sql)\*\*/g))
     assert.ok(files.has(migration), migration + ' must exist');
+});
+
+test('post-review: attestation CLI requires proof and selects remote production or preview explicitly', async () => {
+  const file = 'scripts/cloudflare/attest-email.mjs';
+  const source = baseline
+    ? execFileSync('git', ['show', baseline + ':' + file], { encoding: 'utf8', windowsHide: true })
+    : await readFile(file, 'utf8');
+  const calls = [],
+    output = [];
+  let reply = {
+    status: 0,
+    stdout: JSON.stringify([
+      { success: true, results: [{ id: 42 }] },
+      { success: true, results: [] },
+    ]),
+  };
+  const run = async (
+    args,
+    localRuntime = async () => {
+      throw new Error('Remote must not load local runtime');
+    },
+  ) => {
+    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+    await new AsyncFunction(
+      'localRuntime',
+      'spawnSync',
+      'fileURLToPath',
+      'scriptURL',
+      'process',
+      'console',
+      source.replace(/^import\s[\s\S]*?;\r?\n/gm, '').replaceAll('import.meta.url', 'scriptURL'),
+    )(
+      localRuntime,
+      (...values) => {
+        calls.push(values);
+        return reply;
+      },
+      fileURLToPath,
+      new URL('../../scripts/cloudflare/attest-email.mjs', import.meta.url).href,
+      { argv: ['node', file, ...args], execPath: process.execPath, env: {} },
+      { log: (value) => output.push(value) },
+    );
+  };
+  await run(['42', '--attested', '--remote']);
+  await run(['42', '--attested', '--remote', '--env', 'preview']);
+  assert.equal(calls.length, 2);
+  for (const [index, [executable, args, options]] of calls.entries()) {
+    assert.equal(executable, process.execPath);
+    assert.ok(args[0].endsWith('wrangler.mjs'));
+    assert.equal(args[3], index ? 'hidra-r3b-preview' : 'hidra-r3b');
+    assert.ok(args.includes('--remote'));
+    assert.equal(options.windowsHide, true);
+    assert.notEqual(options.shell, true);
+    const sql = args[args.indexOf('--command') + 1];
+    assert.match(sql, /WHERE id=42 AND email_verified_at IS NULL/);
+    assert.match(sql, /email_attested/);
+    assert.match(sql, /WHERE changes\(\)>0/);
+    if (index) assert.deepEqual(args.slice(args.indexOf('--env')), ['--env', 'preview']);
+    else assert.ok(!args.includes('--env'));
+  }
+  await withDatabase(async ({ db }) => {
+    await db
+      .prepare(
+        "INSERT INTO users(id,name,email,password_hash,created_at,updated_at) VALUES(42,'Synthetic','attested@example.test','unusable',1,1)",
+      )
+      .run();
+    const args = calls[0][1],
+      sql = args[args.indexOf('--command') + 1];
+    const attest = (command) =>
+      db.batch(unstable_splitSqlQuery(command).map((statement) => db.prepare(statement)));
+    assert.equal((await attest(sql))[0].results.length, 1);
+    assert.equal((await attest(sql))[0].results.length, 0, 'Repeated attestation is a no-op');
+    assert.equal((await attest(sql.replaceAll('42', '999')))[0].results.length, 0);
+    assert.equal(
+      (
+        await db
+          .prepare("SELECT COUNT(*) n FROM audit_logs WHERE action='email_attested' AND user_id=42")
+          .first()
+      ).n,
+      1,
+    );
+    assert.equal((await db.prepare('PRAGMA foreign_key_check').all()).results.length, 0);
+  });
+  for (const args of [
+    ['42', '--remote'],
+    ['42 OR 1=1', '--attested', '--remote'],
+    ['42', '--attested', '--remote', '--env'],
+    ['42', '--attested', '--env', 'preview'],
+    ['42', '--attested', '--remote', '--env', 'other'],
+    ['42', '--attested', '--unknown'],
+  ])
+    await assert.rejects(run(args), /Uso/);
+  assert.equal(calls.length, 2, 'Invalid options cannot start any remote command');
+  reply = { status: 1, stdout: 'private-output', stderr: 'private-error' };
+  await assert.rejects(run(['42', '--attested', '--remote']), (error) => !error.message.includes('private-'));
+  assert.ok(output.every((value) => !value.includes('private-')));
+  let disposed = false;
+  await run(['42', '--attested'], async (options) => {
+    assert.equal(options.skipDevVars, true);
+    return {
+      db: {
+        prepare: () => ({
+          bind: (id) => {
+            assert.equal(id, 42);
+            return {};
+          },
+        }),
+        batch: async (statements) => {
+          assert.equal(statements.length, 2);
+          return [{ results: [{ id: 42 }] }];
+        },
+      },
+      mf: {
+        dispose: async () => {
+          disposed = true;
+        },
+      },
+    };
+  });
+  assert.equal(disposed, true);
 });

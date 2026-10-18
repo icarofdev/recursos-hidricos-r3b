@@ -177,6 +177,7 @@ async function withApp(run) {
         async request(path, data, headers = {}, capture = true) {
           const response = await mf.dispatchFetch(origin + path, {
             method: data === undefined ? 'GET' : 'POST',
+            redirect: 'manual',
             headers: {
               Origin: app,
               Cookie: cookie,
@@ -236,8 +237,9 @@ test('A1 distributed account failures never reject a valid password; identity an
         client.request('/api/auth/login', { email: `u${id}@example.test`, password: 'wrong' }),
       ),
     );
-    assert.equal(rejected.filter((r) => r.status === 401).length, 10);
-    assert.equal(rejected.filter((r) => r.status === 429).length, 2);
+    assert.equal(rejected.filter((r) => r.status === 401).length, 12);
+    assert.ok(rejected.every((r) => r.payload.error.code === 'INVALID_CREDENTIALS'));
+    assert.equal('checkFailureLimit' in helpers, false, 'No unused account pre-KDF blocker is exported');
     const owner = await h.browser();
     assert.equal(
       (await owner.request('/api/auth/login', { email: `u${id}@example.test`, password })).status,
@@ -283,8 +285,30 @@ test('A2 sharing configured cannot intercept normal login, downgrade sessions or
     assert.equal(ordinary.payload.read_only, false);
     assert.equal(ordinary.headers.get('Set-Cookie'), null);
     const anonymous = await h.browser();
-    for (let i = 0; i < 30; i++) assert.equal((await anonymous.request('/api/reservoirs')).status, 401);
-    assert.equal((await anonymous.request('/api/reservoirs')).status, 429);
+    for (const page of ['/login', '/']) {
+      const redirect = await anonymous.request(page);
+      assert.equal(redirect.status, 302);
+      assert.ok(redirect.headers.get('Location').startsWith(app + '/'));
+      assert.equal(redirect.headers.get('WWW-Authenticate'), null);
+    }
+    for (let i = 0; i < 31; i++) {
+      const denied = await anonymous.request('/api/reservoirs');
+      assert.equal(denied.status, 401);
+      assert.equal(denied.payload.error.code, 'AUTHENTICATION_REQUIRED');
+      assert.equal(denied.headers.get('WWW-Authenticate'), null);
+    }
+    assert.equal((await h.db.prepare('SELECT COUNT(*) n FROM rate_limits').first()).n, 0);
+    for (let i = 0; i < 30; i++) {
+      const denied = await anonymous.request('/api/reservoirs', undefined, {
+        Authorization: 'Basic ' + Buffer.from('invalid:credentials').toString('base64'),
+      });
+      assert.equal(denied.status, 401);
+      assert.match(denied.headers.get('WWW-Authenticate'), /^Basic /);
+    }
+    assert.equal(
+      (await anonymous.request('/api/reservoirs', undefined, { Authorization: 'Basic invalid' })).status,
+      429,
+    );
     assert.equal(
       (await anonymous.request('/api/auth/login', { email: `u${admin}@example.test`, password })).status,
       200,
@@ -297,6 +321,80 @@ test('A2 sharing configured cannot intercept normal login, downgrade sessions or
     assert.equal((await shared.request('/api/admin/devices')).status, 404);
     assert.equal((await shared.request('/api/auth/logout', {})).status, 200);
   }));
+
+for (const legacy of ['v1', 'previous-pepper'])
+  for (const enrolled of [false, true])
+    test(`post-review: admin ${legacy} hash upgrade replaces a revoked own session before MFA ${enrolled ? 'verification' : 'setup'}`, () =>
+      withApp(async (h) => {
+        const id = await h.user('admin');
+        let secret;
+        if (enrolled) {
+          const first = await h.browser();
+          const login = await first.request('/api/auth/login', { email: `u${id}@example.test`, password });
+          const challenge = login.payload.challenge;
+          const setup = await first.request('/api/auth/admin-totp/setup', { challenge });
+          secret = setup.payload.secret;
+          assert.equal(
+            (await first.request('/api/auth/admin-totp/confirm', { challenge, code: code(secret) })).status,
+            200,
+          );
+        }
+        if (legacy === 'v1') {
+          const row = await h.db.prepare('SELECT password_hash FROM users WHERE id=?').bind(id).first();
+          await h.db
+            .prepare('UPDATE users SET password_hash=? WHERE id=?')
+            .bind(row.password_hash.replace('$v2$primary$', '$v1$'), id)
+            .run();
+        } else {
+          Object.assign(h.bindings, {
+            PASSWORD_PEPPER_PREVIOUS: h.bindings.PASSWORD_PEPPER,
+            PASSWORD_PEPPER_PREVIOUS_ID: 'primary',
+            PASSWORD_PEPPER_PREVIOUS_UNTIL: String(time() + 3600),
+            PASSWORD_PEPPER: randomBytes(32).toString('base64url'),
+            PASSWORD_PEPPER_ID: 'next',
+          });
+          await h.reconfigure();
+        }
+        const client = await h.browser(id),
+          oldCookie = client.cookie;
+        const login = await client.request('/api/auth/login', { email: `u${id}@example.test`, password });
+        assert.equal(login.status, 200);
+        assert.equal(login.payload.stage, enrolled ? 'totp' : 'totp_setup');
+        const challenge = login.payload.challenge;
+        if (enrolled) {
+          assert.equal(
+            (
+              await client.request('/api/auth/admin-totp/verify', {
+                challenge,
+                code: code(secret, Math.floor(Date.now() / 30000) + 1),
+              })
+            ).status,
+            200,
+          );
+        } else {
+          const setup = await client.request('/api/auth/admin-totp/setup', { challenge });
+          assert.equal(setup.status, 200);
+          assert.equal(
+            (
+              await client.request('/api/auth/admin-totp/confirm', {
+                challenge,
+                code: code(setup.payload.secret),
+              })
+            ).status,
+            200,
+          );
+        }
+        assert.notEqual(client.cookie, oldCookie);
+        assert.ok(login.payload.csrf_token);
+        assert.equal(
+          await h.db
+            .prepare('SELECT 1 FROM sessions WHERE token_hash=?')
+            .bind(digest(oldCookie.split('=')[1]))
+            .first(),
+          null,
+        );
+        assert.equal((await client.request('/api/admin/devices')).status, 200);
+      }));
 
 test('A3 parallel rotation issues one candidate and concurrent acknowledgement preserves the winner', () =>
   withApp(async (h) => {

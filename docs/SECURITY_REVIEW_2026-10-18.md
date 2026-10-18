@@ -1,5 +1,81 @@
 # Revisão de segurança e estabilidade — 18/10/2026
 
+## Complemento após o commit ebf3b92
+
+Este complemento valida o documento de correção fornecido pelo usuário. Estado inicial
+desta rodada: branch `security-review-2026-10-18`, HEAD
+`ebf3b92a461cf6f6de80d85210c9e32e9ffed4be`, árvore limpa, remoto `origin` neste
+repositório. O usuário autorizou explicitamente commit e push nesta branch. As seções
+posteriores preservam o registro da revisão original, anterior a esse commit; os estados
+abaixo atualizam os pontos afetados.
+
+| Item                                       | Validação, gravidade e confiança                                                                                                                                                                                                                                            | Correção e regressão                                                                                                                                                                                                                                                        |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 Upgrade de hash quebra MFA               | Confirmado; média, confiança alta; disponibilidade do login administrativo. O trigger de senha apaga a sessão já carregada, deixando o desafio ligado a um cookie inválido.                                                                                                 | `auth/routes.ts` cria sessão anônima nova quando o upgrade revoga a sessão da própria conta; `totp-routes.ts` devolve seu CSRF. Quatro cenários combinam v1/pepper anterior com setup/verificação MFA e sessão prévia sem MFA.                                              |
+| 2 Contador pós-KDF e código morto          | Confirmados o status observável do contador e a exportação sem uso; baixa, confiança alta; consistência. O contador já era posterior ao KDF e não protegia CPU distribuída. A diferença normal entre senha correta e incorreta não é prova isolada de nova vulnerabilidade. | Contador continua limitado a dez falhas/janela, sem estender a janela; saturação não troca `401 INVALID_CREDENTIALS` por 429. IP e IP/e-mail continuam protegidos antes do KDF; `checkFailureLimit` foi removida. A1 e testes existentes cobrem concorrência e limites.     |
+| 3 Cabeça abandonada na fila                | Confirmado; média, confiança alta; disponibilidade/cota MonitorIE. Entrada válida por 140 s podia manter o gate ocioso depois de aberto.                                                                                                                                    | Prioridade de fila vale até 15 s após abrir a janela global; limite global de 70 s permanece atômico. Teste com SQL/relógio controlados usa t=0/5/10/69/70/84/85/86.                                                                                                        |
+| 4 Basic Auth intercepta páginas/API normal | Confirmado; média, confiança alta; disponibilidade/UX. Redirects anônimos e polling após expiração recebiam desafio Basic e consumiam quota de compartilhamento.                                                                                                            | Páginas redirecionam antes de compartilhamento; só header Basic explícito opta por esse login. A2 cobre `/`, `/login`, JSON 401 sem WWW-Authenticate/quota, Basic inválido limitado e sessões autenticadas preservadas.                                                     |
+| 5 Unknown ainda parecia Online             | Confirmado; baixa, confiança alta; integridade da apresentação. A correção original cobria renderConnection, mas não métricas/cartão/pareamento.                                                                                                                            | Estado, contexto, ponto e badge agora tratam unknown explicitamente; ternário duplicado removido. Teste executa as funções reais para SM-WU/SM-WA com/sem last_seen e callback do pareamento.                                                                               |
+| 6a Truncamento da janela de membro         | Confirmado; baixa, confiança alta; metadata incorreta. Limite do proprietário era propagado mesmo quando os pontos cobriam integralmente a janela recente do membro.                                                                                                        | `remoteHistory` só preserva truncamento do provedor se não houver timestamp completo até a fronteira efetiva. Cache vazio continua conservador e corte pelo limit continua sinalizado. Testes incluem limite exato, proprietário, membro e cache compartilhado.             |
+| 6b Seed após tombstone                     | Confirmado; baixa, confiança alta; desenvolvimento local. ID 1 fixo colidia com o ledger após exclusão.                                                                                                                                                                     | `local-db.mjs` reutiliza DEMO-WU mock sem titular ou aloca MAX(ledger)+1. Códigos de ativação usam o ID retornado. Teste executa o corpo real do CLI sobre D1 efêmero: seed/reseed/delete/seed, e recusa demo já vinculada.                                                 |
+| 6c Atestação remota individual             | Funcionalidade ausente confirmada; não classificada como vulnerabilidade.                                                                                                                                                                                                   | `attest-email.mjs` aceita --remote e --env preview, exige ID inteiro seguro e --attested, rejeita opções inválidas, usa Node/Wrapper Wrangler sem shell e não imprime saída privada. Processo remoto é simulado; SQL e auditoria/no-op também são executados em D1 efêmero. |
+
+Nenhuma migration 0015 foi criada; 0001–0014 e `wrangler.toml` estão intactos.
+`MAIL_MODE="disabled"` e `MAIL_REQUIRED="true"` da configuração de produção permanecem
+como trava de readiness. Atestar uma conta individualmente após prova externa da caixa
+postal não configura o provedor e não libera esse readiness.
+
+Uso preparado, **não executado contra serviços reais**:
+
+```text
+node scripts/cloudflare/attest-email.mjs USER_ID --attested
+node scripts/cloudflare/attest-email.mjs USER_ID --attested --remote
+node scripts/cloudflare/attest-email.mjs USER_ID --attested --remote --env preview
+```
+
+Local usa D1 local; remoto sem --env seleciona hidra-r3b; --env preview seleciona
+hidra-r3b-preview. A flag --attested é declaração do operador após verificação externa,
+não uma verificação automatizada da caixa. Nesta rodada nenhum desses comandos reais
+foi executado; somente seus imports/processos substituídos em testes.
+
+Validação final do complemento:
+
+| Verificação                                                  | Resultado                                                                                                                                                  |
+| ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Baseline ebf3b92, somente leitura por git show               | 11 cenários novos/expandidos falham como esperado. Os quatro cenários de MFA reproduzem especificamente 419 no setup/verify.                               |
+| `security-auth-review.test.mjs`                              | 15/15 passaram.                                                                                                                                            |
+| `security-consistency-review.test.mjs`                       | 7/7 passaram.                                                                                                                                              |
+| `security-operations-review.test.mjs`                        | 14/14 passaram.                                                                                                                                            |
+| `security-telemetry-review.test.mjs` (Worker)                | 11/11 passaram.                                                                                                                                            |
+| `security-telemetry-review.test.mjs` (frontend)              | 5/5 passaram.                                                                                                                                              |
+| Compatibilidade em `app.test.mjs`                            | 11 casos distintos aprovados: oito na seleção inicial e três no reteste de expectativas deliberadamente alteradas, incluindo Basic com headers excessivos. |
+| Compatibilidade em `remediation.test.mjs`                    | 3/3 passaram: contador atômico, readiness e histórico/fila/retenção.                                                                                       |
+| `monitorie-protocol.test.mjs` e frontend `security.test.mjs` | 11/11 passaram.                                                                                                                                            |
+| `npm run typecheck`, `npm run lint`, `npm run format:check`  | Passaram.                                                                                                                                                  |
+| `npm run build`                                              | Passou com origens loopback; diretórios de saída conferidos dentro do workspace.                                                                           |
+| Diff, configuração e migrations                              | Sem whitespace inválido; 17 arquivos existentes alterados, nenhum novo. Configuração e migrations preservadas.                                             |
+
+São **77 casos distintos aprovados** nas seleções desta rodada, incluindo os 52 dos
+cinco arquivos de revisão. A suíte completa não foi executada. Falhas esperadas de
+baseline e retestes não foram somados novamente. Os testes antigos ajustados refletiam
+os contratos substituídos: páginas sem desafio Basic, Basic explícito em APIs e
+401 sem Retry-After para contador global pós-KDF saturado. Sua proteção por IP continua
+exigindo 429 com Retry-After antes do KDF. O teste de fila agora representa abertura
+recente, preservando a prioridade durante seus 15 segundos de graça.
+
+Comando dos arquivos de revisão:
+
+```text
+node --test --test-concurrency=1 tests/cloudflare/security-auth-review.test.mjs tests/cloudflare/security-consistency-review.test.mjs tests/cloudflare/security-operations-review.test.mjs tests/cloudflare/security-telemetry-review.test.mjs tests/frontend/security-telemetry-review.test.mjs
+```
+
+Revisão pública da fonte deste build:
+`b73ed046d7da4e88580ee1b80a198af54fda6a8f071308d29ed9c0e3762e9a22`;
+o marcador de `dist/frontend/build-info.json` coincide com a fonte. Build e evidências
+sintéticas continuam ignorados no Git. O commit inclui apenas código, testes e este
+registro, sem secrets, arquivos ignorados ou artefatos gerados. Não houve deploy,
+merge, migration remota, envio de e-mail nem atestação real de conta.
+
 ## Estado e limites da execução
 
 Estado inicial: diretório `recursos-hidricos-r3b`, branch `main`, HEAD
