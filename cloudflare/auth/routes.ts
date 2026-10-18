@@ -9,7 +9,8 @@ import {
   verifyPassword,
 } from './crypto';
 import { csrf, ensureSession, logout, newSession, publicUser, requireUser } from './sessions';
-import { clearFailureLimit, clientIP, rateLimit, reserveAttempt } from './rate-limit';
+import { clearFailureLimit, clientIP, rateLimit } from './rate-limit';
+import { checkLoginChallenge, recordLoginFailure } from './turnstile';
 import { emailVerification } from './email-verification';
 import { resetURL, sendPasswordReset } from '../mail';
 import { startAdminChallenge, totpRoute } from './totp-routes';
@@ -92,7 +93,7 @@ export async function authRoute(c: Context, route: string): Promise<Response> {
     });
   }
   if (route === 'login') {
-    const data = await body(c, ['email', 'password', 'remember', 'next']);
+    const data = await body(c, ['email', 'password', 'remember', 'next', 'turnstile_token']);
     const email = normalizeEmail(string(data, 'email', 254));
     const password = string(data, 'password', 128);
     if (data.remember !== undefined && typeof data.remember !== 'boolean')
@@ -101,17 +102,11 @@ export async function authRoute(c: Context, route: string): Promise<Response> {
     try {
       await rateLimit(c, 'login-ip', ip, isLocal(c) ? 200 : 20, 900);
       await rateLimit(c, 'login-identity', `${ip}|${email}`, 10, 900);
+      await checkLoginChallenge(c, email, data.turnstile_token);
       user = await c.env.DB.prepare('SELECT * FROM users WHERE email=?').bind(email).first<User>();
       const valid = await verifyPassword(password, user?.password_hash, c.env);
       if (!user || !valid) {
-        // This bounded counter is bookkeeping after the KDF, not CPU protection.
-        // Saturation must not change an already verified failure's public status.
-        // IP and IP/identity budgets still reject excessive traffic before the KDF.
-        try {
-          await reserveAttempt(c, 'login-account-failure', email, 10, 60);
-        } catch (error) {
-          if (!(error instanceof HttpError && error.code === 'RATE_LIMIT_EXCEEDED')) throw error;
-        }
+        await recordLoginFailure(c, email);
         throw new HttpError(401, 'INVALID_CREDENTIALS', 'E-mail ou senha inválidos.');
       }
       await clearFailureLimit(c, 'login-account-failure', email);

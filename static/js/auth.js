@@ -1,5 +1,6 @@
 import { safeRedirect } from './redirects.js';
 import QRCode from 'qrcode';
+import { createLoginChallenge } from './login-challenge.js';
 (() => {
   'use strict';
 
@@ -56,6 +57,7 @@ import QRCode from 'qrcode';
     if (!response.ok || !payload?.success) {
       const error = new Error(payload?.error?.message || 'Não foi possível concluir. Tente novamente.');
       error.code = payload?.error?.code || 'REQUEST_FAILED';
+      error.turnstile = payload?.turnstile;
       throw error;
     }
     if (payload?.csrf_token) {
@@ -110,6 +112,19 @@ import QRCode from 'qrcode';
 
   const loginForm = document.getElementById('login-form');
   if (loginForm) {
+    const loginChallenge = createLoginChallenge(
+      document.getElementById('login-challenge-panel'),
+      document.getElementById('login-challenge-widget'),
+      document.getElementById('login-challenge-status'),
+    );
+    loginForm.elements.email.addEventListener('input', () => loginChallenge.clear());
+    document.getElementById('login-challenge-retry').addEventListener('click', async () => {
+      try {
+        await loginChallenge.refresh();
+      } catch (failure) {
+        loginForm.querySelector('[data-form-error]').textContent = failure.message;
+      }
+    });
     const verifyPanel = document.getElementById('totp-panel');
     const setupPanel = document.getElementById('totp-setup-panel');
     const codesPanel = document.getElementById('totp-codes-panel');
@@ -125,14 +140,30 @@ import QRCode from 'qrcode';
     }
     async function submit(form, action, payload, onSuccess) {
       const button = form.querySelector('button[type="submit"]');
+      if (button.disabled) return;
       const error = form.querySelector('[data-form-error]');
       error.textContent = '';
       button.disabled = true;
       button.classList.add('is-submitting');
+      let turnstileToken = '';
       try {
-        await onSuccess(await request(action, { method: 'POST', body: JSON.stringify(payload) }));
+        if (form === loginForm) {
+          turnstileToken = loginChallenge.takeToken();
+          if (turnstileToken) payload.turnstile_token = turnstileToken;
+        }
+        const result = await request(action, { method: 'POST', body: JSON.stringify(payload) });
+        if (form === loginForm) loginChallenge.clear();
+        await onSuccess(result);
       } catch (failure) {
         error.textContent = failure.message;
+        if (form === loginForm) {
+          try {
+            if (failure.turnstile) await loginChallenge.show(failure.turnstile);
+            else if (turnstileToken) await loginChallenge.refresh();
+          } catch (unavailable) {
+            error.textContent = unavailable.message;
+          }
+        }
       } finally {
         button.disabled = false;
         button.classList.remove('is-submitting');
@@ -164,7 +195,7 @@ import QRCode from 'qrcode';
     loginForm.addEventListener('submit', (event) => {
       event.preventDefault();
       if (!loginForm.reportValidity()) return;
-      submit(loginForm, '/api/auth/login', formPayload(loginForm), async (result) => {
+      return submit(loginForm, '/api/auth/login', formPayload(loginForm), async (result) => {
         if (!result.stage) {
           window.location.assign(safeRedirect(result.redirect));
           return;

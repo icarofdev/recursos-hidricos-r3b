@@ -759,6 +759,12 @@ test('mocks funcionam somente em desenvolvimento local e snapshot usa cache', as
   const reservoir = await connect(client, await provision(1, 'mock'));
   const first = await (await client.request('/api/device/snapshot?reservoir_id=' + reservoir.id)).json();
   assert.equal(first.simulated, true);
+  assert.ok(first.data, 'A leitura simulada deve ser posterior ao vínculo com precisão de ms.');
+  const boundary = await db
+    .prepare('SELECT linked_at_ms FROM reservoirs WHERE id=?')
+    .bind(reservoir.id)
+    .first();
+  assert.ok(Date.parse(first.data.timestamp) >= boundary.linked_at_ms);
   await new Promise((r) => setTimeout(r, 1100));
   const second = await (await client.request('/api/device/snapshot?reservoir_id=' + reservoir.id)).json();
   assert.equal(second.data.timestamp, first.data.timestamp);
@@ -1735,12 +1741,15 @@ test('frontend origin refuses redirect loops and readiness validates exact CORS'
   }
 });
 test('ingestion WU and WA concurrency returns one insertion and correct stable reading ID', async () => {
+  const owner = browser();
+  await owner.register('ingest-concurrency@example.test');
   for (const [id, type, fields] of [
     [11, 'SM-WU', { distancia: 20, nivel: 80, volume: 800 }],
     [12, 'SM-WA', { vazao: 12, consumo_acumulado: 600, volume: null }],
   ]) {
-    await provision(id);
+    const code = await provision(id);
     await db.prepare('UPDATE devices SET device_type=? WHERE id=?').bind(type, id).run();
+    await connect(owner, code);
     const token = await credential(id);
     const data = { id, device_type: type, ...fields, rssi_wifi: -50 };
     const headers = { Authorization: `Bearer ${token}`, 'Idempotency-Key': 'sample-1' };
@@ -1778,7 +1787,7 @@ test('ingestion WU and WA concurrency returns one insertion and correct stable r
 });
 test('credential generation rotation revocation and rate limits per device and IP', async () => {
   const admin = await adminBrowser();
-  await provision(9);
+  await connect(admin, await provision(9));
   const first = await (
     await admin.request('/api/admin/devices/9/rotate-token', { method: 'POST', data: {} })
   ).json();
@@ -1809,9 +1818,10 @@ test('credential generation rotation revocation and rate limits per device and I
   assert.equal(last.status, 429);
 });
 test('equal measurements without event identity are retained; source conflicts remain protected', async () => {
-  await provision(4);
-  const token = await credential(4);
   const client = browser();
+  await client.register('ingest-equal@example.test');
+  await connect(client, await provision(4));
+  const token = await credential(4);
   const headers = { Authorization: `Bearer ${token}` },
     data = { id: 4, distancia: 1, nivel: 2, volume: 3, rssi_wifi: -50 };
   const a = await (await client.request('/api/device/ingest', { method: 'POST', data, headers })).json();

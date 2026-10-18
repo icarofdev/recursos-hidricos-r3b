@@ -18,7 +18,7 @@ export function configuration(production = false, env = process.env) {
   const app = origin(env.PUBLIC_APP_URL || (production ? '' : 'http://127.0.0.1:8788'), !production);
   if (api === app) throw new Error('API e frontend precisam de origens distintas');
   const headers = {
-    'Content-Security-Policy': `default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'none'; connect-src 'self' ${api}; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
+    'Content-Security-Policy': `default-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; style-src 'self'; style-src-attr 'none'; connect-src 'self' ${api}; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'`,
     'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
     'Referrer-Policy': 'no-referrer',

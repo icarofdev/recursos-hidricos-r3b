@@ -9,6 +9,13 @@ async function keyFor(c: Context, scope: string, identity: string): Promise<stri
   return hmac(`${scope}\0${identity.toLowerCase().trim()}`, secret(c.env, 'SESSION_SECRET'));
 }
 
+export async function failureCount(c: Context, scope: string, identity: string): Promise<number> {
+  const row = await c.env.DB.prepare('SELECT attempts FROM rate_limits WHERE key_hash=? AND expires_at>?')
+    .bind(await keyFor(c, scope, identity), now())
+    .first<{ attempts: number }>();
+  return row?.attempts ?? 0;
+}
+
 export async function clearFailureLimit(c: Context, scope: string, identity: string): Promise<void> {
   await c.env.DB.prepare('DELETE FROM rate_limits WHERE key_hash=?')
     .bind(await keyFor(c, scope, identity))

@@ -1,5 +1,8 @@
 # Observação de requisições e planejamento de rate limit
 
+Para a proteção de CPU do login, veja [Turnstile adaptativo e regra WAF por IP](LOGIN_ABUSE_PROTECTION.md).
+O guia contém a expressão POST/hostname, adaptações por plano e confirmação do trajeto da API.
+
 O Worker amostra respostas bem-sucedidas de usuários autenticados. Respostas anônimas, recusadas, inválidas ou `204` não geram escrita desta observação no D1. `OBSERVABILITY_SAMPLE_RATE=100` seleciona aproximadamente uma resposta em cem, independentemente em cada isolate, sem depender de flush em memória. O evento `endpoint_request` contém caminho normalizado, método, status, request ID, país aproximado (`request.cf.country`), janela UTC de cinco minutos e `sample_rate`. O D1 guarda contadores de **amostras**, agregados por caminho, método e país. Eles não representam o total de requisições nem permitem medir tentativas recusadas. Sem metadata válida, o país é `XX`.
 
 O caminho é uma rota conhecida ou um modelo como `/api/admin/devices/:id/delete`. Consulta, fragmento, corpo, cabeçalhos, IP bruto, e-mail, senha, token e código não entram no evento. O header `CF-IPCountry` enviado pelo cliente é ignorado. A gravação usa `waitUntil`; falhas não alteram a resposta original. A tabela é limpa em lotes depois de sete dias. Transições de segurança bem-sucedidas continuam na auditoria; falhas de autenticação são amostradas separadamente. Acompanhe abuso e bloqueios pela observabilidade da plataforma/WAF, com retenção configurada externamente; estes contadores de sucesso não bastam para dimensionar regras de ataque.

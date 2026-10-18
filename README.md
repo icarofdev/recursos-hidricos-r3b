@@ -127,6 +127,7 @@ npm run check
 - [Publicação e Configuração na Cloudflare](docs/CLOUDFLARE.md)
 - [Correções de segurança e validação local](docs/REMEDIATION.md)
 - [Revisão de segurança e estabilidade de 18/10/2026](docs/SECURITY_REVIEW_2026-10-18.md)
+- [Proteção do login: Turnstile adaptativo e WAF por IP](docs/LOGIN_ABUSE_PROTECTION.md)
 - [Operação, publicação, rotação e recuperação](docs/OPERATIONS.md)
 - [Protocolo, Contrato e Pendências da MonitorIE](docs/MONITORIE.md)
 - [Inventário e Decisões de Migração](docs/MIGRATION.md)

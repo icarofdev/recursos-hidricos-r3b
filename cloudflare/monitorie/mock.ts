@@ -1,6 +1,5 @@
 import type { MonitorieAdapter, TelemetryScope } from './adapter';
 import type { Reading, SMWAReading, Snapshot } from '../types';
-import { now } from '../http';
 
 function reading(scope: TelemetryScope, time: number): Reading | SMWAReading {
   if (scope.deviceType === 'SM-WA')
@@ -24,7 +23,7 @@ function reading(scope: TelemetryScope, time: number): Reading | SMWAReading {
 }
 export class MockMonitorie implements MonitorieAdapter {
   async snapshot(scope: TelemetryScope): Promise<Snapshot> {
-    const time = now();
+    const time = Date.now() / 1000;
     return {
       simulated: true,
       device: {
@@ -38,7 +37,7 @@ export class MockMonitorie implements MonitorieAdapter {
     };
   }
   async history(scope: TelemetryScope, since: number, limit: number): Promise<(Reading | SMWAReading)[]> {
-    const end = now();
+    const end = Date.now() / 1000;
     const start = Math.max(since, scope.linkedAt);
     const step = Math.max(60, Math.ceil((end - start) / Math.max(1, limit - 1)));
     const data = [];

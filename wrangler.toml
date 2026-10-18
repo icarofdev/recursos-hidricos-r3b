@@ -9,9 +9,14 @@ MAIL_MODE = "disabled"
 MONITORIE_CACHE_SECONDS = "300"
 DEVICE_OFFLINE_AFTER_SECONDS = "90"
 INGEST_ENABLED = "false"
-APP_URL = "https://hidra-r3b.vercel.app"
+# APP_URL já existe como binding Secret no Worker; preserve-o no deploy.
 CORS_ORIGINS = "https://hidra-r3b.vercel.app"
-MAIL_REQUIRED = "true"
+# Exceção temporária autorizada pelo operador: e-mail ainda não provisionado.
+MAIL_REQUIRED = "false"
+LOGIN_TURNSTILE_MODE = "adaptive"
+LOGIN_TURNSTILE_FAILURE_THRESHOLD = "5"
+LOGIN_TURNSTILE_WINDOW_SECONDS = "900"
+TURNSTILE_SITE_KEY = "0x4AAAAAAFal3KRm5oYYb1yh"
 OBSERVABILITY_SAMPLE_RATE = "100"
 HISTORY_MAX_SAMPLES = "10000"
 MONITORIE_SMWU_MAPPING = '{"distancia":{"key":"d","unit":"cm"},"nivel":{"key":"nivel","unit":"%"},"volume":{"key":"volume","unit":"L"},"rssi_wifi":{"key":"rssi_wifi","unit":"dBm"}}'

@@ -24,8 +24,10 @@ resolvidas; um deploy manual também exige autorização separada.
    dos próprios valores. Não inferir bindings publicados a partir do arquivo local.
 5. Configure Resend, domínio/remetente e `RESEND_API_KEY`. O binding correto é
    **EMAIL_FROM**, não MAIL_FROM. Defina `MAIL_MODE=resend` quando a recuperação for
-   obrigatória. Produção declara `MAIL_REQUIRED=true`: enquanto o modo continuar
-   desativado, readiness deve falhar. Preview pode manter e-mail opcional desativado.
+   obrigatória. Exceção temporária autorizada pelo operador em 18/10/2026: produção
+   mantém `MAIL_MODE=disabled` e `MAIL_REQUIRED=false`, com recuperação e envio de
+   confirmação indisponíveis. Restaure `MAIL_REQUIRED=true` ao habilitar o provedor.
+   Preview também pode manter e-mail opcional desativado.
 6. Valide formato de `TOTP_ENCRYPTION_KEY`, `SESSION_SECRET` e `PASSWORD_PEPPER` sem
    copiar valores para logs. Confirme `/api/health` (liveness sem banco) e `/api/ready`
    (schema/configuração, sem chamadas ao Resend ou MonitorIE).

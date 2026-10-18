@@ -18,6 +18,7 @@ import { observeEndpoint } from './observability/endpoint-requests';
 import { requireTotpKey } from './auth/totp';
 import { mailConfigured } from './mail';
 import { keyId } from './auth/key-window';
+import { LoginChallengeError, loginTurnstileConfiguration } from './auth/turnstile';
 
 declare const __BUILD_REVISION__: string;
 
@@ -118,6 +119,7 @@ export default {
             code: known ? error.code : 'SERVICE_UNAVAILABLE',
             message: known ? error.message : 'Serviço temporariamente indisponível.',
           },
+          ...(error instanceof LoginChallengeError ? { turnstile: error.challenge } : {}),
         },
         known ? error.status : 503,
       );
@@ -195,6 +197,7 @@ async function route(c: Context): Promise<Response> {
       }>();
       if (schema?.value !== '14') throw new Error('schema');
       keyId(c.env.PASSWORD_PEPPER_ID);
+      loginTurnstileConfiguration(c);
       await requireTotpKey(c.env);
       if (c.env.MAIL_REQUIRED === 'true' && !mailConfigured(c.env)) throw new Error('mail');
       if (c.env.MONITORIE_MODE === 'live' && !(await monitorieAuthConfigured(c.env)))

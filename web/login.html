@@ -130,6 +130,13 @@
                 ><input name="remember" type="checkbox" /><span>Lembrar de mim</span></label
               ><a href="/esqueci-senha">Esqueci minha senha</a>
             </div>
+            <section id="login-challenge-panel" hidden aria-label="Verificação de segurança">
+              <div id="login-challenge-widget"></div>
+              <p id="login-challenge-status" role="status" aria-live="polite"></p>
+              <button id="login-challenge-retry" class="auth-text-button" type="button">
+                Recarregar verificação
+              </button>
+            </section>
             <p class="form-error" data-form-error role="alert"></p>
             <button class="auth-submit" type="submit">
               <span>Entrar</span><span class="button-loader" aria-hidden="true"></span>

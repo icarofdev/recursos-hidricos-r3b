@@ -1,5 +1,8 @@
 # Revisão de segurança e estabilidade — 18/10/2026
 
+Complemento posterior: [Turnstile adaptativo antes do PBKDF2](LOGIN_ABUSE_PROTECTION.md).
+Widget de produção criado no painel em 18/10/2026. Posteriormente, o operador autorizou commit, push e deploy, mantendo Resend temporariamente desativado. A API usa somente workers.dev e a conta não tem zonas cadastradas para a regra WAF. As seções abaixo registram as rodadas anteriores.
+
 ## Complemento após o commit ebf3b92
 
 Este complemento valida o documento de correção fornecido pelo usuário. Estado inicial

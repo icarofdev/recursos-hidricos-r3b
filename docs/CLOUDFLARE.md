@@ -86,25 +86,25 @@ node scripts/cloudflare/wrangler.mjs secret put MONITORIE_PASSWORD --env preview
 
 As configurações não secretas ficam em `[vars]` e `[env.preview.vars]` no `wrangler.toml`. Preencha `APP_URL` e `CORS_ORIGINS` somente quando a URL HTTPS estável do frontend correspondente for conhecida; use a origem exata, sem caminho, query, fragmento ou curingas.
 
-| Nome                           | Production                          | Preview                          |
-| ------------------------------ | ----------------------------------- | -------------------------------- |
-| `APP_ENV`                      | `production`                        | `preview`                        |
-| `APP_URL`                      | origem exata do frontend Production | origem exata do frontend Preview |
-| `CORS_ORIGINS`                 | mesma origem exata de Production    | mesma origem exata de Preview    |
-| `READINGS_RETENTION_DAYS`      | `90`                                | `90`                             |
-| `AUDIT_RETENTION_DAYS`         | `180`                               | `180`                            |
-| `RETENTION_BATCH_SIZE`         | `2000`                              | `2000`                           |
-| `RETENTION_MAX_BATCHES`        | `2`                                 | `2`                              |
-| `MONITORIE_CACHE_SECONDS`      | `300`                               | `300`                            |
-| `DEVICE_OFFLINE_AFTER_SECONDS` | `90`                                | `90`                             |
-| `MONITORIE_MODE`               | `live`                              | `live`                           |
-| `MONITORIE_SMWU_MAPPING`       | JSON mapeando chaves SM-WU          | JSON mapeando chaves SM-WU       |
-| `MONITORIE_SMWA_MAPPING`       | JSON mapeando chaves SM-WA          | JSON mapeando chaves SM-WA       |
-| `MAIL_MODE`                    | `disabled` até configurar Resend    | `disabled`                       |
-| `MAIL_REQUIRED`                | `true`                              | `false`                          |
-| `INGEST_ENABLED`               | `false`                             | `false`                          |
+| Nome                           | Production                                   | Preview                          |
+| ------------------------------ | -------------------------------------------- | -------------------------------- |
+| `APP_ENV`                      | `production`                                 | `preview`                        |
+| `APP_URL`                      | origem exata do frontend Production          | origem exata do frontend Preview |
+| `CORS_ORIGINS`                 | mesma origem exata de Production             | mesma origem exata de Preview    |
+| `READINGS_RETENTION_DAYS`      | `90`                                         | `90`                             |
+| `AUDIT_RETENTION_DAYS`         | `180`                                        | `180`                            |
+| `RETENTION_BATCH_SIZE`         | `2000`                                       | `2000`                           |
+| `RETENTION_MAX_BATCHES`        | `2`                                          | `2`                              |
+| `MONITORIE_CACHE_SECONDS`      | `300`                                        | `300`                            |
+| `DEVICE_OFFLINE_AFTER_SECONDS` | `90`                                         | `90`                             |
+| `MONITORIE_MODE`               | `live`                                       | `live`                           |
+| `MONITORIE_SMWU_MAPPING`       | JSON mapeando chaves SM-WU                   | JSON mapeando chaves SM-WU       |
+| `MONITORIE_SMWA_MAPPING`       | JSON mapeando chaves SM-WA                   | JSON mapeando chaves SM-WA       |
+| `MAIL_MODE`                    | `disabled` até configurar Resend             | `disabled`                       |
+| `MAIL_REQUIRED`                | `false` temporário, autorizado pelo operador | `false`                          |
+| `INGEST_ENABLED`               | `false`                                      | `false`                          |
 
-`/api/ready` verifica origens, secrets, formato da chave TOTP, schema 14 e configurações das funcionalidades obrigatórias. Não consulta provedores externos. Com `MAIL_REQUIRED=true` e `MAIL_MODE=disabled`, retorna 503 até o operador configurar recuperação e confirmação. `/api/health` é somente liveness.
+`/api/ready` verifica origens, secrets, formato da chave TOTP, schema 14 e configurações das funcionalidades obrigatórias. Não consulta provedores externos. Com `MAIL_REQUIRED=true` e `MAIL_MODE=disabled`, retorna 503 até o operador configurar recuperação e confirmação. Por solicitação do operador em 18/10/2026, o envio permanece temporariamente desativado e opcional para readiness (`MAIL_REQUIRED=false`). Os fluxos dependentes de e-mail continuam indisponíveis. Depois de provisionar Resend, configure `MAIL_MODE=resend` e restaure `MAIL_REQUIRED=true`. `/api/health` é somente liveness.
 
 ### Integrações opcionais
 
