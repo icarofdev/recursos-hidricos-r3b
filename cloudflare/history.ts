@@ -35,40 +35,36 @@ export async function history(c: Context, row: ReservoirRow): Promise<Response> 
         : ['distancia', 'nivel', 'volume', 'rssi_wifi'];
     // All rows in the requested window participate, never just the newest LIMIT.
     resolution = total > limit ? Math.max(1, Math.ceil((end - start + 1) / limit)) : 0;
-    const query = resolution
-      ? `SELECT id,MIN(created_at) created_at,COUNT(*) sample_count,${fields.map((f) => `AVG(${f}) ${f}`).join(',')}${row.device_type === 'SM-WU' ? ",CASE WHEN COUNT(volume)<COUNT(*) OR COUNT(nivel)<COUNT(*) THEN 'contains_invalid' ELSE 'reported' END measurement_quality" : ''}
-      FROM (SELECT * FROM ${table} WHERE reservoir_id=? AND created_at BETWEEN ? AND ? ORDER BY created_at,reading_id LIMIT ?) GROUP BY CAST((created_at-?)/? AS INTEGER) ORDER BY created_at`
-      : `SELECT * FROM ${table} WHERE reservoir_id=? AND created_at BETWEEN ? AND ? ORDER BY created_at,reading_id LIMIT ?`;
-    const stmt = c.env.DB.prepare(query);
-    const rows = await (
-      resolution
-        ? stmt.bind(row.id, start, end, maxSamples, start, resolution)
-        : stmt.bind(row.id, start, end, maxSamples)
-    ).all<Record<string, unknown>>();
-    data = rows.results.map((r) => ({
-      id: r.id,
-      ...Object.fromEntries(fields.map((f) => [f, r[f]])),
-      timestamp: iso(Number(r.created_at)),
-      sample_count: r.sample_count ?? 1,
-      ...(row.device_type === 'SM-WU' ? { measurement_quality: r.measurement_quality } : {}),
-    }));
     if (row.device_type === 'SM-WU' && row.geometry !== 'reported') {
       // Nonlinear conversion happens per sample BEFORE averaging buckets.
       const buckets = new Map<
         number,
-        { timestamp: number; count: number; sums: Record<string, number>; counts: Record<string, number> }
+        {
+          timestamp: number;
+          count: number;
+          sums: Record<string, number>;
+          counts: Record<string, number>;
+          withinTolerance: boolean;
+        }
       >();
       data = [];
       let cursorTime = start,
         cursorId = 0;
       for (let pageNumber = 0; pageNumber < Math.ceil(maxSamples / 500) + 1; pageNumber++) {
         const page = await c.env.DB.prepare(
-          'SELECT * FROM smwu_readings WHERE reservoir_id=? AND created_at BETWEEN ? AND ? AND (created_at>? OR (created_at=? AND reading_id>?)) ORDER BY created_at,reading_id LIMIT 500',
+          'SELECT reading_id,id,distancia,nivel,volume,rssi_wifi,created_at,measurement_quality FROM smwu_readings WHERE reservoir_id=? AND created_at BETWEEN ? AND ? AND (created_at>? OR (created_at=? AND reading_id>?)) ORDER BY created_at,reading_id LIMIT 500',
         )
           .bind(row.id, start, end, cursorTime, cursorTime, cursorId)
           .all<Record<string, unknown>>();
         for (const raw of page.results) {
-          const converted = configuredReading(row, raw);
+          const converted = configuredReading<Record<string, unknown>>(row, {
+            id: Number(raw.id),
+            distancia: raw.distancia,
+            nivel: raw.nivel,
+            volume: raw.volume,
+            rssi_wifi: raw.rssi_wifi,
+            measurement_quality: raw.measurement_quality,
+          });
           if (!resolution)
             data.push({ ...converted, timestamp: iso(Number(raw.created_at)), sample_count: 1 });
           else {
@@ -78,8 +74,10 @@ export async function history(c: Context, row: ReservoirRow): Promise<Response> 
               count: 0,
               sums: {},
               counts: {},
+              withinTolerance: false,
             };
             bucket.count++;
+            if (converted.measurement_quality === 'within_tolerance') bucket.withinTolerance = true;
             for (const field of fields)
               if (typeof converted[field] === 'number') {
                 bucket.sums[field] = (bucket.sums[field] ?? 0) + Number(converted[field]);
@@ -104,9 +102,32 @@ export async function history(c: Context, row: ReservoirRow): Promise<Response> 
               bucket.counts[field] ? bucket.sums[field] / bucket.counts[field] : null,
             ]),
           ),
-          measurement_quality: bucket.counts.volume === bucket.count ? 'valid' : 'contains_invalid',
+          measurement_quality:
+            bucket.counts.volume === bucket.count
+              ? bucket.withinTolerance
+                ? 'within_tolerance'
+                : 'valid'
+              : 'contains_invalid',
           volume_source: 'backend',
         }));
+    } else {
+      const query = resolution
+        ? `SELECT id,MIN(created_at) created_at,COUNT(*) sample_count,${fields.map((f) => `AVG(${f}) ${f}`).join(',')}${row.device_type === 'SM-WU' ? ",CASE WHEN COUNT(volume)<COUNT(*) OR COUNT(nivel)<COUNT(*) THEN 'contains_invalid' ELSE 'reported' END measurement_quality" : ''}
+      FROM (SELECT * FROM ${table} WHERE reservoir_id=? AND created_at BETWEEN ? AND ? ORDER BY created_at,reading_id LIMIT ?) GROUP BY CAST((created_at-?)/? AS INTEGER) ORDER BY created_at`
+        : `SELECT * FROM ${table} WHERE reservoir_id=? AND created_at BETWEEN ? AND ? ORDER BY created_at,reading_id LIMIT ?`;
+      const stmt = c.env.DB.prepare(query);
+      const rows = await (
+        resolution
+          ? stmt.bind(row.id, start, end, maxSamples, start, resolution)
+          : stmt.bind(row.id, start, end, maxSamples)
+      ).all<Record<string, unknown>>();
+      data = rows.results.map((r) => ({
+        id: r.id,
+        ...Object.fromEntries(fields.map((f) => [f, r[f]])),
+        timestamp: iso(Number(r.created_at)),
+        sample_count: r.sample_count ?? 1,
+        ...(row.device_type === 'SM-WU' ? { measurement_quality: r.measurement_quality } : {}),
+      }));
     }
   } else if (row.source === 'monitorie' && row.external_id === null) {
     data = [];

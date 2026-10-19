@@ -46,6 +46,7 @@ export async function startAdminChallenge(
   next: unknown,
 ): Promise<Response> {
   await requireTotpKey(c.env);
+  if (!c.session || c.session.user_id !== null || c.session.read_only) await newSession(c, null);
   const token = randomToken();
   const hash = await sha256(token);
   const session = c.session;
@@ -53,11 +54,15 @@ export async function startAdminChallenge(
   const credential = await c.env.DB.prepare('SELECT 1 FROM admin_totp WHERE user_id=?').bind(user.id).first();
   const stage: Stage = credential ? 'verify' : 'setup';
   const time = now();
+  session.last_seen = time;
+  session.expires_at = Math.max(session.expires_at, time + 3600);
   await c.env.DB.batch([
-    c.env.DB.prepare('DELETE FROM admin_totp_challenges WHERE user_id=? OR session_hash=?').bind(
-      user.id,
-      session.token_hash,
-    ),
+    c.env.DB.prepare(
+      'UPDATE sessions SET last_seen=?,expires_at=MAX(expires_at,?) WHERE token_hash=? AND user_id IS NULL',
+    ).bind(time, time + 3600, session.token_hash),
+    c.env.DB.prepare(
+      "DELETE FROM admin_totp_challenges WHERE session_hash=? OR (user_id=? AND (stage<>'recovery_setup' OR expires_at<=? OR consumed_at IS NOT NULL OR attempts>=5))",
+    ).bind(session.token_hash, user.id, time),
     c.env.DB.prepare(
       `INSERT INTO admin_totp_challenges(challenge_hash,user_id,session_hash,session_version,stage,remember,next_path,expires_at,created_at)
       VALUES (?,?,?,?,?,?,?,?,?)`,
@@ -284,22 +289,37 @@ async function totpRouteInner(
   if (!credential) throw invalid();
   if (recovery) {
     if (!/^[A-Za-z0-9_-]{24}$/.test(recovery)) return failure(c, row);
-    const used = await c.env.DB.prepare(
-      'UPDATE admin_totp_recovery SET used_at=? WHERE code_hash=? AND user_id=? AND used_at IS NULL RETURNING code_hash',
-    )
-      .bind(now(), await recoveryHash(user.id, recovery), user.id)
-      .first();
-    if (!used) return failure(c, row);
-    await c.env.DB.prepare(
-      "UPDATE admin_totp_challenges SET stage='recovery_setup',attempts=0 WHERE challenge_hash=? AND consumed_at IS NULL",
-    )
-      .bind(row.challenge_hash)
-      .run();
+    const time = now();
+    const results = await c.env.DB.batch([
+      c.env.DB.prepare(
+        `UPDATE admin_totp_recovery SET used_at=?
+        WHERE code_hash=? AND user_id=? AND used_at IS NULL
+        AND EXISTS(
+          SELECT 1 FROM admin_totp_challenges ch JOIN users u ON u.id=ch.user_id
+          WHERE ch.challenge_hash=? AND ch.consumed_at IS NULL AND ch.attempts<5 AND ch.stage='verify'
+          AND ch.session_hash=? AND ch.expires_at>? AND u.id=? AND u.role='admin' AND u.session_version=?
+        ) RETURNING code_hash`,
+      ).bind(
+        time,
+        await recoveryHash(user.id, recovery),
+        user.id,
+        row.challenge_hash,
+        c.session!.token_hash,
+        time,
+        user.id,
+        row.session_version,
+      ),
+      c.env.DB.prepare(
+        "UPDATE admin_totp_challenges SET stage='recovery_setup',pending_secret_encrypted=NULL,attempts=0,expires_at=? WHERE challenge_hash=? AND consumed_at IS NULL AND stage='verify' AND changes()>0 RETURNING challenge_hash",
+      ).bind(time + 300, row.challenge_hash),
+    ]);
+    if (!results[0].results.length) return failure(c, row);
+    if (!results[1].results.length) throw invalid();
     return json({
       success: true,
       stage: 'totp_setup',
       challenge: token,
-      expires_in: Math.max(0, row.expires_at - now()),
+      expires_in: 300,
     });
   }
   const secret = await decryptTotp(c.env, user.id, credential.secret_encrypted);

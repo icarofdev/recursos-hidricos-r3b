@@ -6,7 +6,13 @@ const command = args[0];
 const email = args[1]?.toLowerCase().trim();
 const isRemote = args.includes('--remote');
 
-if (command !== 'set-admin' || !email) {
+if (
+  command !== 'set-admin' ||
+  !email ||
+  email.length > 254 ||
+  !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+  /[\r\n\0]/.test(email)
+) {
   console.log('Uso: node scripts/cloudflare/admin.mjs set-admin <email> [--remote]');
   process.exit(1);
 }
@@ -23,7 +29,7 @@ if (!isRemote) {
         .bind(email),
       db
         .prepare(
-          "INSERT INTO audit_logs(action,device_id,user_id,details,created_at) SELECT 'admin_promoted',NULL,id,json_object('method','cli_bootstrap'),unixepoch() FROM users WHERE lower(email)=? AND email_verified_at IS NOT NULL",
+          "INSERT INTO audit_logs(action,device_id,user_id,details,created_at) SELECT 'admin_promoted',NULL,id,json_object('method','cli_bootstrap'),unixepoch() FROM users WHERE lower(email)=? AND email_verified_at IS NOT NULL AND changes()>0",
         )
         .bind(email),
     ]);
@@ -46,7 +52,7 @@ if (!isRemote) {
   const sql = `UPDATE users SET role='admin' WHERE lower(email)='${cleanEmail}' AND email_verified_at IS NOT NULL RETURNING id, role;
 INSERT INTO audit_logs(action, device_id, user_id, details, created_at)
 SELECT 'admin_promoted', NULL, id, json_object('method', 'cli_bootstrap'), unixepoch()
-FROM users WHERE lower(email)='${cleanEmail}' AND email_verified_at IS NOT NULL;`;
+FROM users WHERE lower(email)='${cleanEmail}' AND email_verified_at IS NOT NULL AND changes()>0;`;
   const wranglerArgs = ['d1', 'execute', 'hidra-r3b', '--command', sql, '--json', '--remote'];
 
   const child = spawn(process.execPath, [cli, ...wranglerArgs], {

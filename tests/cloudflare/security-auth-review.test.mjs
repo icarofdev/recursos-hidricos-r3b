@@ -813,3 +813,143 @@ test('new: password change after consuming an MFA setup challenge cannot install
     );
     assert.match(error?.message ?? '', /mutation_guard|CHECK constraint/);
   }));
+
+test('NEW-01/NEW-06d: read-only shared session masks member emails in /api/devices/users and /api/device/ingest.php bypasses sharedAccess', () =>
+  withApp(async (h) => {
+    const ownerId = await h.user(),
+      memberId = await h.user();
+    await h.db
+      .prepare(
+        "INSERT INTO devices(id,device_code,device_type,source,created_at,updated_at) VALUES(1,'SYNTHETIC-1','SM-WU','local',?,?)",
+      )
+      .bind(time(), time())
+      .run();
+    await h.db
+      .prepare(
+        "INSERT INTO reservoirs(id,user_id,device_id,name,linked_at,linked_at_ms,created_at,updated_at) VALUES(1,?,1,'Shared Tank',?,?,?,?)",
+      )
+      .bind(ownerId, time(), time() * 1000, time(), time())
+      .run();
+    await h.db
+      .prepare(
+        "INSERT INTO device_users(device_id,user_id,linked_at,access_generation,access_started_ms) VALUES(1,?,?, 'gen-2', ?)",
+      )
+      .bind(memberId, time(), time() * 1000)
+      .run();
+    Object.assign(h.bindings, {
+      DASHBOARD_SHARE_USERNAME: 'viewer',
+      DASHBOARD_SHARE_PASSWORD: 'share-secret-password',
+      DASHBOARD_SHARE_USER_EMAIL: `u${ownerId}@example.test`,
+      INGEST_ENABLED: 'true',
+    });
+    await h.reconfigure();
+    const basic = 'Basic ' + Buffer.from('viewer:share-secret-password').toString('base64');
+    const viewer = await h.browser();
+    const res = await viewer.request('/api/devices/users?reservoir_id=1', undefined, {
+      Authorization: basic,
+    });
+    assert.equal(res.status, 200);
+    assert.equal(res.payload.data.length, 2);
+    assert.ok(res.payload.data.every((m) => m.email === null));
+
+    const ownerClient = await h.browser(ownerId);
+    const ownerRes = await ownerClient.request('/api/devices/users?reservoir_id=1');
+    assert.equal(ownerRes.status, 200);
+    assert.ok(ownerRes.payload.data.every((m) => typeof m.email === 'string' && m.email.includes('@')));
+
+    const ingestClient = await h.browser();
+    const ingestRes = await ingestClient.request(
+      '/api/device/ingest.php',
+      { id: 1, distancia: 50, rssi_wifi: -60 },
+      { Authorization: basic },
+    );
+    assert.equal(ingestRes.status, 401);
+    assert.equal(
+      (await h.db.prepare('SELECT COUNT(*) n FROM sessions WHERE read_only=1').first()).n,
+      1,
+      '/api/device/ingest.php must not create a new shared session',
+    );
+  }));
+
+test('NEW-02/NEW-03: admin MFA isolates pre-existing user session, refreshes anonymous TTL, extends recovery_setup expiry and preserves active recovery_setup across concurrent logins', () =>
+  withApp(async (h) => {
+    const regularId = await h.user('user'),
+      adminId = await h.user('admin');
+    const sharedBrowser = await h.browser(regularId);
+    assert.equal((await sharedBrowser.request('/api/auth/me')).status, 200);
+
+    // Logging in as admin on a browser that had an active user session must demote to an anonymous pre-MFA session.
+    const adminLogin = await sharedBrowser.request('/api/auth/login', {
+      email: `u${adminId}@example.test`,
+      password,
+    });
+    assert.equal(adminLogin.status, 200);
+    assert.equal(adminLogin.payload.stage, 'totp_setup');
+    assert.equal(
+      (await sharedBrowser.request('/api/auth/me')).status,
+      401,
+      'Previous user session must not remain authenticated during admin MFA challenge',
+    );
+
+    // Anonymous session near expiration is refreshed when starting an admin challenge.
+    const anonBrowser = await h.browser();
+    await h.db
+      .prepare('UPDATE sessions SET expires_at=? WHERE user_id IS NULL')
+      .bind(time() + 10)
+      .run();
+    const enrolledLogin = await anonBrowser.request('/api/auth/login', {
+      email: `u${adminId}@example.test`,
+      password,
+    });
+    assert.equal(enrolledLogin.status, 200);
+    const refreshed = await h.db
+      .prepare('SELECT expires_at FROM sessions WHERE token_hash=?')
+      .bind(digest(anonBrowser.cookie.split('=')[1]))
+      .first();
+    assert.ok(refreshed.expires_at >= time() + 3000);
+    const setup1 = await anonBrowser.request('/api/auth/admin-totp/setup', {
+      challenge: enrolledLogin.payload.challenge,
+    });
+    const confirm1 = await anonBrowser.request('/api/auth/admin-totp/confirm', {
+      challenge: enrolledLogin.payload.challenge,
+      code: code(setup1.payload.secret),
+    });
+    assert.equal(confirm1.status, 200);
+    const recoveryCode = confirm1.payload.recovery_codes[0];
+
+    // Start recovery on recoveryBrowser when challenge is near expiration.
+    const recoveryBrowser = await h.browser();
+    const verifyLogin = await recoveryBrowser.request('/api/auth/login', {
+      email: `u${adminId}@example.test`,
+      password,
+    });
+    await h.db
+      .prepare('UPDATE admin_totp_challenges SET expires_at=? WHERE challenge_hash=?')
+      .bind(time() + 5, digest(verifyLogin.payload.challenge))
+      .run();
+    const recovered = await recoveryBrowser.request('/api/auth/admin-totp/verify', {
+      challenge: verifyLogin.payload.challenge,
+      recovery_code: recoveryCode,
+    });
+    assert.equal(recovered.status, 200);
+    assert.equal(recovered.payload.stage, 'totp_setup');
+    assert.equal(recovered.payload.expires_in, 300);
+
+    // Another browser logging in with password must NOT delete the active recovery_setup challenge.
+    const otherBrowser = await h.browser();
+    const concurrentLogin = await otherBrowser.request('/api/auth/login', {
+      email: `u${adminId}@example.test`,
+      password,
+    });
+    assert.equal(concurrentLogin.status, 200);
+
+    const recoverySetup = await recoveryBrowser.request('/api/auth/admin-totp/setup', {
+      challenge: verifyLogin.payload.challenge,
+    });
+    assert.equal(recoverySetup.status, 200);
+    const recoveryConfirm = await recoveryBrowser.request('/api/auth/admin-totp/confirm', {
+      challenge: verifyLogin.payload.challenge,
+      code: code(recoverySetup.payload.secret),
+    });
+    assert.equal(recoveryConfirm.status, 200);
+  }));

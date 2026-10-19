@@ -437,3 +437,83 @@ test('synthetic schema14 restore preserves device tombstones and passes the exis
     }
   });
 });
+
+test('NEW-05/NEW-06a: validate-pairing masks prior-owner activity and member unlink guards against concurrent ownership transfer', async () => {
+  await fixture(async ({ db, context, create }) => {
+    const device = await create('02:00:00:00:00:71');
+    const nowSec = seconds();
+    await db
+      .prepare(
+        "INSERT INTO users(id,name,email,password_hash,role,email_verified_at,created_at,updated_at) VALUES(2,'Member','member@example.test','hash','user',1,?,?)",
+      )
+      .bind(nowSec, nowSec)
+      .run();
+    await db
+      .prepare(
+        "INSERT INTO reservoirs(id,user_id,device_id,name,linked_at,linked_at_ms,created_at,updated_at) VALUES(1,1,?,'Tank',?,?,?,?)",
+      )
+      .bind(device.id, nowSec - 100, (nowSec - 100) * 1000, nowSec - 100, nowSec - 100)
+      .run();
+    await db
+      .prepare(
+        "INSERT INTO device_users(device_id,user_id,linked_at,access_generation,access_started_ms) VALUES(?,2,?,'gen-member',?)",
+      )
+      .bind(device.id, nowSec - 50, (nowSec - 50) * 1000)
+      .run();
+
+    // Simulate concurrent ownership transfer right before member unlink batch executes.
+    let intercepted = false;
+    const paused = {
+      prepare: (sql) => db.prepare(sql),
+      async batch(statements) {
+        if (!intercepted) {
+          intercepted = true;
+          await db.prepare('UPDATE reservoirs SET user_id=2 WHERE id=1').run();
+          await db.prepare('UPDATE devices SET owner_user_id=2 WHERE id=?').bind(device.id).run();
+        }
+        return db.batch(statements);
+      },
+    };
+    const memberUser = await db.prepare('SELECT * FROM users WHERE id=2').first();
+    const unlinkCtx = {
+      ...context('/api/devices/unlink', { reservoir_id: 1, confirmation: true }, paused),
+      user: memberUser,
+    };
+    await assert.rejects(
+      api.reservoirsRoute(unlinkCtx, '/api/devices/unlink').catch((error) => api.domainError(error)),
+      (error) => error.status === 409,
+    );
+    assert.equal(
+      (
+        await db
+          .prepare('SELECT COUNT(*) n FROM device_users WHERE device_id=? AND user_id=2')
+          .bind(device.id)
+          .first()
+      ).n,
+      1,
+      'New owner must not lose their device_users link when a stale member-leave races transfer',
+    );
+
+    // Simulate lingering reported_status/last_seen/communication_checked_at after prior owner erasure.
+    const rawCode = 'HIDRA-SYNTHETIC-PAIRING-0071';
+    const codeHash = createHash('sha256').update(rawCode).digest('hex');
+    await db.prepare('DELETE FROM users WHERE id=2').run();
+    await db
+      .prepare(
+        "UPDATE devices SET owner_user_id=NULL,reported_status='online',last_seen=?,communication_checked_at=?,pairing_code_hash=?,pairing_expires_at=? WHERE id=?",
+      )
+      .bind(nowSec, nowSec, codeHash, nowSec + 3600, device.id)
+      .run();
+    await db
+      .prepare('INSERT INTO activation_codes(device_id,code_hash,expires_at,created_at) VALUES(?,?,?,?)')
+      .bind(device.id, codeHash, nowSec + 3600, nowSec)
+      .run();
+    const validateCtx = context('/api/devices/validate-pairing', {
+      pairing_code: rawCode,
+      mac_address: '02:00:00:00:00:71',
+    });
+    const validated = await (await api.reservoirsRoute(validateCtx, '/api/devices/validate-pairing')).json();
+    assert.equal(validated.data.last_seen, null);
+    assert.equal(validated.data.status, 'offline');
+  });
+});

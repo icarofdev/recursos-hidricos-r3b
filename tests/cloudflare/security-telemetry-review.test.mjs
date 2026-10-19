@@ -710,3 +710,48 @@ test('outbound telemetry cancels rejected/oversized bodies without following red
     assert.equal(cancelled, 1);
   });
 });
+
+test('NEW-04: configured SM-WU history strips internal columns and preserves within_tolerance in downsampled buckets', async () => {
+  await withDatabase(async ({ DB, context, seed }) => {
+    const row = await seed({ source: 'local' });
+    await DB.prepare('UPDATE reservoirs SET geometry=?,capacity_liters=1000,measurement_config=? WHERE id=1')
+      .bind(
+        'uniform',
+        JSON.stringify({
+          empty_distance_cm: 120,
+          full_distance_cm: 20,
+          sensor_min_cm: 10,
+          tolerance_cm: 2,
+        }),
+      )
+      .run();
+    const configured = await api.owned(context(), row.id);
+    const stamp = seconds() - 100;
+    await DB.batch([
+      DB.prepare(
+        "INSERT INTO smwu_readings(id,reservoir_id,distancia,nivel,volume,rssi_wifi,created_at,event_key,payload_hash,measurement_quality) VALUES(1,1,121,0,0,-60,?,'evt-1','hash-1','within_tolerance')",
+      ).bind(stamp),
+      DB.prepare(
+        "INSERT INTO smwu_readings(id,reservoir_id,distancia,nivel,volume,rssi_wifi,created_at,event_key,payload_hash,measurement_quality) VALUES(1,1,70,50,500,-60,?,'evt-2','hash-2','valid')",
+      ).bind(stamp + 1),
+    ]);
+
+    const rawHistory = await (
+      await api.history(context(1, '/api/device/history?limit=10'), configured)
+    ).json();
+    assert.equal(rawHistory.count, 2);
+    for (const entry of rawHistory.data) {
+      assert.equal('event_key' in entry, false);
+      assert.equal('payload_hash' in entry, false);
+      assert.equal('reading_id' in entry, false);
+      assert.equal('reservoir_id' in entry, false);
+      assert.equal('created_at' in entry, false);
+    }
+    assert.equal(rawHistory.data[0].measurement_quality, 'within_tolerance');
+
+    const bucketed = await (await api.history(context(1, '/api/device/history?limit=1'), configured)).json();
+    assert.equal(bucketed.count, 1);
+    assert.equal(bucketed.data[0].sample_count, 2);
+    assert.equal(bucketed.data[0].measurement_quality, 'within_tolerance');
+  });
+});

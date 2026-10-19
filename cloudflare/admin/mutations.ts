@@ -138,6 +138,9 @@ export async function deviceMutation(c: Context, path: string): Promise<Response
         c.env.DB.prepare(
           'UPDATE reservoirs SET unlinked_at=?,updated_at=? WHERE device_id=? AND unlinked_at IS NULL',
         ).bind(time, time, deviceId),
+        c.env.DB.prepare(
+          "UPDATE devices SET reported_status='offline',last_seen=NULL,communication_checked_at=NULL,updated_at=? WHERE id=?",
+        ).bind(time, deviceId),
       );
     statements.push(
       c.env.DB.prepare(

@@ -665,3 +665,15 @@ test('post-review: attestation CLI requires proof and selects remote production 
   });
   assert.equal(disposed, true);
 });
+
+test('NEW-06b/NEW-06c: provision.mjs targets hidra-r3b, respects tombstones and cleans temporary SQL; admin.mjs validates email and requires changes()>0', async () => {
+  const provisionSource = await readFile('scripts/cloudflare/provision.mjs', 'utf8');
+  assert.match(provisionSource, /'hidra-r3b'/);
+  assert.doesNotMatch(provisionSource, /'d1',\s*'execute',\s*'DB'/);
+  assert.match(provisionSource, /device_identities/);
+  assert.match(provisionSource, /finally\s*\{\s*await rm\(file,\s*\{\s*force:\s*true\s*\}\);/s);
+
+  const adminSource = await readFile('scripts/cloudflare/admin.mjs', 'utf8');
+  assert.match(adminSource, /email\.length > 254/);
+  assert.match(adminSource, /changes\(\)>0/);
+});

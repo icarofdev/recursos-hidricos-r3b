@@ -38,6 +38,11 @@ export function present(c: Context, row: ReservoirRow) {
     row.last_seen !== null && Math.round(row.last_seen * 1000) < row.access_linked_at_ms
       ? null
       : row.last_seen;
+  const visibleChecked =
+    row.communication_checked_at !== null &&
+    Math.round(row.communication_checked_at * 1000) < row.access_linked_at_ms
+      ? null
+      : row.communication_checked_at;
   return {
     id: row.id,
     name: row.name,
@@ -64,7 +69,7 @@ export function present(c: Context, row: ReservoirRow) {
               row.external_id,
               row.reported_status,
               visibleLastSeen,
-              row.communication_checked_at,
+              visibleChecked,
             ),
       last_seen: row.source === 'monitorie' && row.external_id === null ? null : iso(visibleLastSeen),
       offline_after_seconds: threshold,
@@ -94,7 +99,8 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
       limit: 5,
       data: results.map((member) => ({
         ...member,
-        email: row.user_id === user.id || member.id === user.id ? member.email : null,
+        email:
+          !c.session?.read_only && (row.user_id === user.id || member.id === user.id) ? member.email : null,
         is_owner: member.id === row.user_id,
         linked_at: iso(member.linked_at),
       })),
@@ -258,13 +264,23 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
     const row = await owned(c, id);
     const time = now();
     if (row.user_id !== user.id) {
-      await c.env.DB.batch([
-        c.env.DB.prepare('DELETE FROM device_users WHERE device_id=? AND user_id=?').bind(
+      const results = await c.env.DB.batch([
+        guard(
+          c,
+          'SELECT 1 FROM reservoirs r JOIN devices d ON d.id=r.device_id WHERE r.id=? AND r.device_id=? AND r.unlinked_at IS NULL AND r.user_id<>? AND d.owner_user_id=r.user_id AND d.owner_user_id<>?',
+          id,
+          row.device_id,
+          user.id,
+          user.id,
+        ),
+        c.env.DB.prepare('DELETE FROM device_users WHERE device_id=? AND user_id=? RETURNING user_id').bind(
           row.device_id,
           user.id,
         ),
         auditStatement(c, 'device_user_left', row.device_id, undefined, true),
       ]);
+      if (!results[1].results.length)
+        throw new HttpError(404, 'RESERVOIR_NOT_FOUND', 'Reservatório não encontrado.');
       return json({ success: true });
     }
     const results = await c.env.DB.batch([
@@ -272,6 +288,9 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
       c.env.DB.prepare(
         'UPDATE reservoirs SET unlinked_at=?,updated_at=? WHERE id=? AND user_id=? AND unlinked_at IS NULL RETURNING id',
       ).bind(time, time, id, user.id),
+      c.env.DB.prepare(
+        "UPDATE devices SET reported_status='offline',last_seen=NULL,communication_checked_at=NULL,updated_at=? WHERE id=?",
+      ).bind(time, row.device_id),
       auditStatement(c, 'device_unlinked', row.device_id, { reservoir_id: id }, true),
     ]);
     const result = results[1].results[0];
@@ -292,7 +311,7 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
     const hash = await sha256(code);
     if (!connect) {
       const device = await c.env.DB.prepare(
-        `SELECT device_code,mac_address,device_type,source,external_id,reported_status,last_seen,communication_checked_at FROM devices WHERE pairing_code_hash=? AND owner_user_id IS NULL AND pairing_expires_at>? AND (mac_address=? OR (mac_address IS NULL AND ? IS NULL))
+        `SELECT device_code,mac_address,device_type,source,external_id,reported_status,last_seen,communication_checked_at,ownership_generation,first_claim_at FROM devices WHERE pairing_code_hash=? AND owner_user_id IS NULL AND pairing_expires_at>? AND (mac_address=? OR (mac_address IS NULL AND ? IS NULL))
          AND EXISTS(SELECT 1 FROM activation_codes ac WHERE ac.device_id=devices.id AND ac.code_hash=devices.pairing_code_hash AND ac.used_at IS NULL AND ac.revoked_at IS NULL AND ac.expires_at>unixepoch())`,
       )
         .bind(hash, now(), mac, mac)
@@ -305,9 +324,14 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
           reported_status: string;
           last_seen: number | null;
           communication_checked_at: number | null;
+          ownership_generation: number;
+          first_claim_at: number | null;
         }>();
       if (!device) throw pairingError();
-      const threshold = configInt(c.env.DEVICE_OFFLINE_AFTER_SECONDS, 90, 5, 86400);
+      const priorOwnership = device.ownership_generation > 0 || device.first_claim_at !== null;
+      const visibleLastSeen = priorOwnership ? null : device.last_seen;
+      const visibleChecked = priorOwnership ? null : device.communication_checked_at;
+      const visibleReported = priorOwnership ? 'offline' : device.reported_status;
       return json({
         success: true,
         data: {
@@ -318,12 +342,12 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
             c.env,
             device.source,
             device.external_id,
-            device.reported_status,
-            device.last_seen,
-            device.communication_checked_at,
+            visibleReported,
+            visibleLastSeen,
+            visibleChecked,
           ),
           last_seen:
-            device.source === 'monitorie' && device.external_id === null ? null : iso(device.last_seen),
+            device.source === 'monitorie' && device.external_id === null ? null : iso(visibleLastSeen),
         },
       });
     }
@@ -339,6 +363,9 @@ export async function reservoirsRoute(c: Context, path: string): Promise<Respons
       .bind(user.id, name, time, time, time, Date.now(), hash, time, mac, mac)
       .first<{ id: number; device_id: number }>();
     if (!result) throw pairingError();
+    await c.env.DB.prepare('UPDATE devices SET communication_checked_at=NULL WHERE id=?')
+      .bind(result.device_id)
+      .run();
 
     return json({ success: true, data: present(c, await owned(c, result.id)) }, 201);
   }

@@ -220,10 +220,10 @@ async function route(c: Context): Promise<Response> {
     });
   }
   await loadSession(c);
-  const share = path === '/api/device/ingest' ? null : await sharedAccess(c);
-  if (share) return share;
   if (path.startsWith('/api/') && path.endsWith('.php')) path = path.slice(0, -4);
   if (path === '/api/reservoirs/index' || path === '/api/reservoirs/') path = '/api/reservoirs';
+  const share = path === '/api/device/ingest' ? null : await sharedAccess(c);
+  if (share) return share;
   if (path === '/api/auth/delete-account') {
     method(c, ['POST']);
     const user = requireUser(c);
@@ -233,7 +233,11 @@ async function route(c: Context): Promise<Response> {
       const data = await body(c, ['confirmation']);
       if (data.confirmation !== true)
         throw new HttpError(422, 'CONFIRMATION_REQUIRED', 'Confirme a exclusão da conta.');
+      const time = now();
       await c.env.DB.batch([
+        c.env.DB.prepare(
+          "UPDATE devices SET reported_status='offline',last_seen=NULL,communication_checked_at=NULL,updated_at=? WHERE owner_user_id=?",
+        ).bind(time, user.id),
         c.env.DB.prepare('DELETE FROM users WHERE id=?').bind(user.id),
         auditStatement(c, 'account_deleted', null),
       ]);
