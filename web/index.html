@@ -18,7 +18,7 @@
     <script defer src="/static/js/dashboard.js"></script>
   </head>
   <body class="is-loading">
-    <aside id="email-proof-banner" hidden>
+    <aside id="email-proof-banner" class="dashboard-email-proof" aria-label="Confirmação de e-mail" hidden>
       <p>Confirme seu e-mail para conceder ou receber novos acessos.</p>
       <button id="request-email-verification" type="button">Enviar confirmação</button>
       <p id="email-proof-feedback" role="status" aria-live="polite"></p>
@@ -85,9 +85,23 @@
 
     <aside class="sidebar" id="sidebar" aria-label="Navegação principal">
       <div class="brand">
-        <span class="brand-logo"
-          ><img src="/static/images/hidra-fjk.png" alt="Hidra FJK" width="2172" height="724"
-        /></span>
+        <a class="brand-logo sidebar-brand" href="/" aria-label="Hidra FJK">
+          <img
+            class="sidebar-logo-horizontal"
+            src="/static/images/hidra-fjk-sidebar-horizontal.png"
+            alt=""
+            width="1907"
+            height="526"
+          />
+          <img
+            class="sidebar-logo-symbol"
+            src="/static/images/hidra-fjk-sidebar-symbol.png"
+            alt=""
+            width="986"
+            height="986"
+          />
+          <span class="sidebar-brand-tooltip" role="tooltip">Hidra FJK</span>
+        </a>
         <button class="icon-button sidebar-close" id="sidebar-close" type="button" aria-label="Fechar menu">
           <svg aria-hidden="true"><use href="#icon-close"></use></svg>
         </button>

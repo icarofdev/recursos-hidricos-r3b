@@ -217,7 +217,7 @@ export function bindSidebar() {
     if (!mobile.matches || !document.body.classList.contains('menu-open')) return;
     if (event.key === 'Escape') close(true);
     if (event.key === 'Tab') {
-      const links = [closeButton, ...sidebar.querySelectorAll('a[href]')];
+      const links = [...sidebar.querySelectorAll('a[href], button:not([disabled])')];
       const first = links[0],
         last = links[links.length - 1];
       if (event.shiftKey && document.activeElement === first) {
